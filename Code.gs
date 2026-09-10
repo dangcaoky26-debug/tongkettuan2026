@@ -1,552 +1,226 @@
 /**
- * THI ĐUA TUẦN 2026-2027 - API V2.1
+ * THI ĐUA TUẦN 2026-2027 - API V3.0 PERFORMANCE
  * Roles: LOP_TRUONG | GVCN | ADMIN
- * - Lớp trưởng: nhập/gửi báo cáo
- * - GVCN: chỉ xem tình hình lớp
- * - Admin: duyệt báo cáo, thống kê, đặt lại mật khẩu tài khoản
+ * Week 1: 05/09/2026 - 11/09/2026
+ * One active record per Lớp + Tuần. Resubmission overwrites current record.
  */
 const SPREADSHEET_ID = '1iarqsBIYbot9KD0UQAhZcwlQEiJZhSHxQk8NP1496g4';
+const API_VERSION = '3.0.0';
 const START_SCORE = 200;
 const TOKEN_DAYS = 30;
 const CLASSES = ['10A','10B','10C','10D','10E','11A','11B','11C','11D','11E','12A','12B','12C','12D','12E','12F','12G'];
-const ROLES = ['LOP_TRUONG','GVCN','ADMIN'];
+const REPORT_HEADERS = ['SubmissionID','Cập nhật lúc','Tuần','Lớp','Tổng trừ','Tổng cộng','Tổng điểm','Trạng thái','Tài khoản','Ghi chú','Dòng chi tiết','Số dòng chi tiết','Lượt vi phạm','Lượt khen thưởng','Phiên bản'];
+const SUMMARY_HEADERS = ['Tuần','Lớp','GVCN','Điểm nền','Điểm trừ','Điểm cộng','Tổng điểm','Trạng thái','Xếp hạng','Lượt vi phạm','Lượt khen thưởng','Cập nhật lúc'];
+const WEEK_CONTROLS = ['TỰ ĐỘNG','MỞ','KHÓA','KHÔNG TÍNH'];
 
 function doGet() {
-  return json_({ok:true, service:'THI_DUA_TUAN_API', version:'2.1.0'});
+  return json_({ok:true, service:'THI_DUA_TUAN_API', version:API_VERSION, week1:'05/09/2026'});
 }
 
 function doPost(e) {
   try {
-    const body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-    const action = String(body.action || '');
-    if (action === 'login') return json_(login_(body));
-    if (action === 'criteria') return json_(criteria_(body));
-    if (action === 'weekStatus') return json_(weekStatus_(body));
-    if (action === 'submit') return json_(submit_(body));
-    if (action === 'dashboard') return json_(dashboard_(body));
-    if (action === 'adminDecision') return json_(adminDecision_(body));
-    if (action === 'adminSetPassword') return json_(adminSetPassword_(body));
-    if (action === 'syncWeek') return json_(syncWeekAction_(body));
-    return json_({ok:false, error:'UNKNOWN_ACTION'});
+    const b = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    const a = String(b.action || '');
+    let out;
+    if (a === 'login') out = login_(b);
+    else if (a === 'leaderHome') out = leaderHomeAction_(b);
+    else if (a === 'dashboard') out = dashboard_(b);
+    else if (a === 'submit') out = submit_(b);
+    else if (a === 'adminDecision') out = adminDecision_(b);
+    else if (a === 'adminAccounts') out = adminAccounts_(b);
+    else if (a === 'adminUpdateAccount') out = adminUpdateAccount_(b);
+    else if (a === 'adminWeeks') out = adminWeeks_(b);
+    else if (a === 'adminUpdateWeek') out = adminUpdateWeek_(b);
+    else if (a === 'adminAnalytics') out = adminAnalytics_(b);
+    else out = {ok:false, error:'UNKNOWN_ACTION'};
+    return json_(out);
   } catch (err) {
-    log_('ERROR', err && err.stack ? err.stack : String(err));
-    return json_({ok:false, error:'SERVER_ERROR', message:String(err && err.message ? err.message : err)});
+    const msg = String(err && err.message ? err.message : err);
+    const known = ['AUTH_REQUIRED','AUTH_INVALID','TOKEN_EXPIRED','ACCOUNT_LOCKED','ROLE_NOT_ALLOWED','INVALID_WEEK','WEEK_LOCKED','WEEK_NOT_COUNTED'];
+    if (known.indexOf(msg) >= 0) return json_({ok:false,error:msg});
+    log_('ERROR', err && err.stack ? err.stack : msg);
+    return json_({ok:false,error:'SERVER_ERROR',message:msg});
   }
 }
 
-function setupSystem() {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+function setupV3() {
+  const ss = ss_();
+  ensureSheet_(ss,'TAI_KHOAN',['Tài khoản','MAT_KHAU_HASH','Lớp','Vai trò','Họ tên','Trạng thái','Token','Token hết hạn','Ghi chú']);
+  ensureSheet_(ss,'BAO_CAO_TUAN',REPORT_HEADERS);
+  ensureSheet_(ss,'TỔNG ĐIỂM',SUMMARY_HEADERS);
+  ensureSheet_(ss,'NHAT_KY_BAO_CAO',['Lưu lúc','SubmissionID cũ','Tuần','Lớp','Tổng trừ','Tổng cộng','Tổng điểm','Trạng thái','Tài khoản','Ghi chú','Thay bởi','Lý do']);
   ensureDataColumns_(ss);
-  ensureSheet_(ss,'TAI_KHOAN',['Tài khoản','MAT_KHAU_HASH','Lớp','Vai trò','Họ tên','Trạng thái','Token','Token hết hạn','Cờ cũ (không dùng)']);
-  ensureSheet_(ss,'PHAT_TAI_KHOAN',['Tài khoản','Mật khẩu tạm','Lớp','Ghi chú']);
-  ensureSheet_(ss,'BAO_CAO_TUAN',['SubmissionID','Thời gian','Tuần','Lớp','Tổng trừ','Tổng cộng','Tổng điểm','Trạng thái','Tài khoản','Ghi chú']);
-  ensureSheet_(ss,'API_LOG',['Thời gian','Loại','Nội dung']);
-  ensureSheet_(ss,'TỔNG ĐIỂM',['Tuần','Lớp','GVCN','Điểm nền','Điểm trừ','Điểm cộng','Tổng điểm','Trạng thái','Xếp hạng','Lượt vi phạm','Lượt khen thưởng','Cập nhật lúc']);
-  for (let w=1; w<=35; w++) syncWeekSummary_(ss,w);
-  return 'Đã đồng bộ hệ thống V2.1.';
+  for (let w=1; w<=35; w++) ensureWeekSummary_(ss,w);
+  return 'V3.0 ready';
 }
 
 function login_(b) {
   const username = normalizeUsername_(b.username);
-  const password = String(b.password != null ? b.password : b.pin || '').trim();
+  const password = String(b.password != null ? b.password : (b.pin != null ? b.pin : '')).trim();
   if (!username || !password) return {ok:false,error:'LOGIN_FAILED'};
-  const sh = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName('TAI_KHOAN');
+  const ss=ss_(), sh = ss.getSheetByName('TAI_KHOAN');
   if (!sh) return {ok:false,error:'SYSTEM_NOT_SETUP'};
-  const data = sh.getDataRange().getValues();
-  for (let r=1; r<data.length; r++) {
-    const account = String(data[r][0] || '').trim().toUpperCase();
-    if (account !== username) continue;
-    if (String(data[r][5] || '') !== 'Hoạt động') return {ok:false,error:'ACCOUNT_DISABLED'};
-    if (String(data[r][1] || '') !== hash_(password)) return {ok:false,error:'LOGIN_FAILED'};
-    const role = String(data[r][3] || 'LOP_TRUONG').trim().toUpperCase();
-    const className = String(data[r][2] || '').trim().toUpperCase();
-    if (!ROLES.includes(role)) return {ok:false,error:'ROLE_INVALID'};
-    if (role !== 'ADMIN' && !CLASSES.includes(className)) return {ok:false,error:'CLASS_NOT_ACTIVE'};
-    const token = Utilities.getUuid() + Utilities.getUuid();
-    const expires = new Date(Date.now() + TOKEN_DAYS*86400000);
-    sh.getRange(r+1,7,1,2).setValues([[token,expires]]);
-    SpreadsheetApp.flush();
-    return {
-      ok:true,
-      token,
-      username:account,
-      className,
-      role,
-      displayName:String(data[r][4] || account),
-      apiVersion:'2.1.0'
-    };
-  }
-  return {ok:false,error:'LOGIN_FAILED'};
+  const cell = sh.getRange('A:A').createTextFinder(username).matchEntireCell(true).findNext();
+  if (!cell || cell.getRow() < 2) return {ok:false,error:'LOGIN_FAILED'};
+  const row = cell.getRow();
+  const v = sh.getRange(row,1,1,9).getValues()[0];
+  if (String(v[5]) !== 'Hoạt động') return {ok:false,error:'ACCOUNT_LOCKED'};
+  if (String(v[1]) !== hash_(password)) return {ok:false,error:'LOGIN_FAILED'};
+  const role = String(v[3] || 'LOP_TRUONG').toUpperCase();
+  const className = String(v[2] || '').trim().toUpperCase();
+  if (role !== 'ADMIN' && CLASSES.indexOf(className) < 0) return {ok:false,error:'CLASS_NOT_ACTIVE'};
+  const oldToken = String(v[6] || '');
+  if (oldToken) CacheService.getScriptCache().remove('tok:'+oldToken);
+  const token = Utilities.getUuid()+Utilities.getUuid();
+  const exp = new Date(Date.now()+TOKEN_DAYS*86400000);
+  sh.getRange(row,7,1,2).setValues([[token,exp]]);
+  const user = {username:username,className:className,role:role,displayName:String(v[4] || username),row:row};
+  CacheService.getScriptCache().put('tok:'+token, JSON.stringify({row:row}), 21600);
+  const base = {ok:true,token:token,className:className,role:role,displayName:user.displayName,username:username,apiVersion:API_VERSION};
+  if (role === 'LOP_TRUONG') base.home = leaderHome_(ss,user);
+  else if (role === 'GVCN') { const info = activeWeekInfo_(ss); base.home = teacherDashboard_(ss, info.week, className); base.weeks = weekList_(ss); }
+  else if (role === 'ADMIN') { const info = activeWeekInfo_(ss); base.home = adminDashboard_(ss, info.week); base.weeks = weekList_(ss); }
+  return base;
 }
 
 function normalizeUsername_(v) {
-  let s = String(v || '').trim().toUpperCase().replace(/[\s._-]+/g,'');
-  const cls = '(?:10[A-E]|11[A-E]|12[A-G])';
-  if (new RegExp('^'+cls+'$').test(s)) return 'LT'+s;
-  let m = s.match(new RegExp('^(?:LT|LOPTRUONG)('+cls+')$'));
-  if (m) return 'LT'+m[1];
-  m = s.match(new RegExp('^('+cls+')(?:LT|LOPTRUONG)$'));
-  if (m) return 'LT'+m[1];
-  m = s.match(new RegExp('^(?:GV|GVCN|GIAOVIEN)('+cls+')$'));
-  if (m) return 'GV'+m[1];
-  m = s.match(new RegExp('^('+cls+')(?:GV|GVCN|GIAOVIEN)$'));
-  if (m) return 'GV'+m[1];
+  let s = String(v || '').trim().toUpperCase().replace(/\s+/g,'').replace(/-/g,'');
+  if (/^((10[A-E])|(11[A-E])|(12[A-G]))$/.test(s)) s = 'LT'+s;
+  if (/^((10[A-E])|(11[A-E])|(12[A-G]))_LT$/.test(s)) s = 'LT'+s.replace('_LT','');
+  if (/^GVCN((10[A-E])|(11[A-E])|(12[A-G]))$/.test(s)) s = 'GV'+s.slice(4);
   return s;
 }
 
 function auth_(token) {
   token = String(token || '');
   if (!token) throw new Error('AUTH_REQUIRED');
-  const sh = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName('TAI_KHOAN');
-  if (!sh) throw new Error('SYSTEM_NOT_SETUP');
-  const data = sh.getDataRange().getValues();
-  for (let r=1; r<data.length; r++) {
-    if (String(data[r][6] || '') !== token) continue;
-    const expires = new Date(data[r][7]);
-    if (!expires || isNaN(expires.getTime()) || expires.getTime() < Date.now()) throw new Error('TOKEN_EXPIRED');
-    if (String(data[r][5] || '') !== 'Hoạt động') throw new Error('ACCOUNT_DISABLED');
-    const role = String(data[r][3] || 'LOP_TRUONG').trim().toUpperCase();
-    const className = String(data[r][2] || '').trim().toUpperCase();
-    if (!ROLES.includes(role)) throw new Error('ROLE_INVALID');
-    if (role !== 'ADMIN' && !CLASSES.includes(className)) throw new Error('CLASS_NOT_ACTIVE');
-    return {username:String(data[r][0]), className, role, displayName:String(data[r][4] || data[r][0])};
+  const ss = ss_(), sh = ss.getSheetByName('TAI_KHOAN');
+  if (!sh) throw new Error('AUTH_INVALID');
+  let row = 0;
+  const cached = CacheService.getScriptCache().get('tok:'+token);
+  if (cached) { try { row = Number(JSON.parse(cached).row || 0); } catch(e) {} }
+  if (!row) {
+    const cell = sh.getRange('G:G').createTextFinder(token).matchEntireCell(true).findNext();
+    if (!cell || cell.getRow() < 2) throw new Error('AUTH_INVALID');
+    row = cell.getRow();
+    CacheService.getScriptCache().put('tok:'+token,JSON.stringify({row:row}),21600);
   }
-  throw new Error('AUTH_INVALID');
+  const v = sh.getRange(row,1,1,9).getValues()[0];
+  if (String(v[6]) !== token) throw new Error('AUTH_INVALID');
+  if (String(v[5]) !== 'Hoạt động') throw new Error('ACCOUNT_LOCKED');
+  const exp = new Date(v[7]);
+  if (!v[7] || isNaN(exp.getTime()) || exp.getTime() < Date.now()) throw new Error('TOKEN_EXPIRED');
+  const role = String(v[3] || 'LOP_TRUONG').toUpperCase();
+  const className = String(v[2] || '').trim().toUpperCase();
+  if (role !== 'ADMIN' && CLASSES.indexOf(className) < 0) throw new Error('AUTH_INVALID');
+  return {username:String(v[0]),className:className,role:role,displayName:String(v[4] || v[0]),row:row,token:token};
 }
 
-function criteria_(b) {
-  const u = auth_(b.token);
-  if (u.role !== 'LOP_TRUONG') return {ok:false,error:'ROLE_NOT_ALLOWED'};
-  const sh = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName('DM_TIEU_CHI');
-  if (!sh) throw new Error('MISSING_CRITERIA_SHEET');
-  const data = sh.getDataRange().getValues();
-  const out = [];
-  for (let r=1; r<data.length; r++) {
-    if (!data[r][0]) continue;
-    out.push({code:String(data[r][0]), name:String(data[r][1]), unit:String(data[r][2]), point:Number(data[r][3]), group:String(data[r][4])});
-  }
-  return {ok:true,criteria:out,startScore:START_SCORE};
+function leaderHomeAction_(b) { const u = auth_(b.token); if (u.role !== 'LOP_TRUONG') throw new Error('ROLE_NOT_ALLOWED'); return {ok:true,home:leaderHome_(ss_(),u)}; }
+function leaderHome_(ss,u) {
+  const w = activeWeekInfo_(ss), report = readReport_(ss,w.week,u.className), details = report && report.submissionId ? detailsForReport_(ss,report) : [];
+  return {week:w,criteria:criteriaList_(ss),report:report || emptyReport_(w.week,u.className,w.effectiveStatus),entries:details.map(function(x){return {code:x.code,qty:x.qty,student:x.student,date:x.dateInput,note:x.note};}),canReport:w.canReport};
 }
-
-function weekStatus_(b) {
-  const u = auth_(b.token);
-  if (u.role !== 'LOP_TRUONG') return {ok:false,error:'ROLE_NOT_ALLOWED'};
-  const week = validWeek_(b.week);
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const status = latestWeekStatus_(ss,week,u.className);
-  status.details = latestDetails_(ss,week,u.className);
-  return status;
-}
+function dashboard_(b) { const u = auth_(b.token), ss = ss_(), week = validWeek_(b.week || activeWeekInfo_(ss).week); if (u.role === 'ADMIN') return adminDashboard_(ss,week); if (u.role === 'GVCN') return teacherDashboard_(ss,week,u.className); throw new Error('ROLE_NOT_ALLOWED'); }
 
 function submit_(b) {
-  const u = auth_(b.token);
-  if (u.role !== 'LOP_TRUONG') return {ok:false,error:'ROLE_NOT_ALLOWED'};
-  const week = validWeek_(b.week);
-  const entries = Array.isArray(b.entries) ? b.entries : [];
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  ensureDataColumns_(ss);
-  const crit = criteriaMap_(ss);
-  const report = ss.getSheetByName('BAO_CAO_TUAN');
-  const detail = ss.getSheetByName('DATA_CHI_TIET');
-  if (!report || !detail) throw new Error('Thiếu sheet dữ liệu');
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
+  const u = auth_(b.token); if (u.role !== 'LOP_TRUONG') throw new Error('ROLE_NOT_ALLOWED');
+  const ss = ss_(), week = validWeek_(b.week), wi = weekInfo_(ss,week); if (!wi.counted) throw new Error('WEEK_NOT_COUNTED'); if (!wi.canReport) throw new Error('WEEK_LOCKED');
+  const entries = Array.isArray(b.entries) ? b.entries : [], crit = criteriaMap_(ss), lock = LockService.getScriptLock(); lock.waitLock(20000);
   try {
-    const reportData = report.getDataRange().getValues();
-    for (let r=reportData.length-1; r>=1; r--) {
-      if (Number(reportData[r][2]) !== week || String(reportData[r][3]) !== u.className) continue;
-      const st = String(reportData[r][7]);
-      if (st === 'Đã duyệt') return {ok:false,error:'WEEK_LOCKED'};
-      if (st === 'Chờ duyệt') report.getRange(r+1,8).setValue('Đã thay thế');
-      break;
-    }
-    markOldDetails_(detail,week,u.className);
-    const submissionId = Utilities.getUuid();
-    const now = new Date();
-    let plus=0, minus=0;
-    const rows=[];
-    entries.forEach(x => {
-      const code = String(x.code || '').trim().toUpperCase();
-      const c = crit[code];
-      if (!c) throw new Error('Mã tiêu chí không hợp lệ: '+code);
-      const qty = Math.floor(Number(x.qty || 0));
-      if (qty <= 0 || qty > 500) throw new Error('Số lượng không hợp lệ: '+code);
-      const amount = c.point * qty;
-      if (amount >= 0) plus += amount; else minus += amount;
-      const date = x.date ? new Date(x.date+'T12:00:00') : now;
-      rows.push({
-        main:[week,u.className,code,qty,String(x.student||''),date,String(x.note||''),'Chờ duyệt',u.username],
-        meta:[submissionId,now]
-      });
+    const old = readReport_(ss,week,u.className); if (old && old.submissionId) { archiveReport_(ss,old,u.username,'Gửi lại cùng lớp + tuần'); markDetailsReplaced_(ss,old); }
+    ensureDataColumns_(ss); const detail = ss.getSheetByName('DATA_CHI_TIET'), now = new Date(), submissionId = Utilities.getUuid();
+    let plus=0, minus=0, violations=0, rewards=0; const rows = [];
+    entries.forEach(function(x){
+      const code = String(x.code || '').trim().toUpperCase(), c = crit[code]; if (!c) throw new Error('Mã tiêu chí không hợp lệ: '+code);
+      const qty = Math.floor(Number(x.qty || 0)); if (qty <= 0 || qty > 500) throw new Error('Số lượng không hợp lệ: '+code);
+      const amount = c.point*qty; if (amount >= 0) { plus += amount; rewards += qty; } else { minus += amount; violations += qty; }
+      let d = now; if (x.date) { const parsed = new Date(String(x.date)+'T12:00:00'); if (!isNaN(parsed.getTime())) d = parsed; }
+      rows.push({main:[week,u.className,code,qty,String(x.student||''),d,String(x.note||''),'Chờ duyệt',u.username],meta:[submissionId,now]});
     });
-    if (rows.length) {
-      const start = nextDetailRow_(detail);
-      detail.getRange(start,1,rows.length,9).setValues(rows.map(r=>r.main));
-      detail.getRange(start,15,rows.length,2).setValues(rows.map(r=>r.meta));
-    }
-    const score = START_SCORE + plus + minus;
-    report.appendRow([submissionId,now,week,u.className,minus,plus,score,'Chờ duyệt',u.username,String(b.note||'')]);
-    SpreadsheetApp.flush();
-    syncWeekSummary_(ss,week);
-    log_('SUBMIT',u.username+' '+u.className+' tuần '+week+' = '+score);
-    return {ok:true,submissionId,score,status:'Chờ duyệt',minus,plus,updatedSummary:true};
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function dashboard_(b) {
-  const u = auth_(b.token);
-  const week = validWeek_(b.week || 1);
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  syncWeekSummary_(ss,week);
-  if (u.role === 'ADMIN') return adminDashboard_(ss,week);
-  if (u.role === 'GVCN') return teacherDashboard_(ss,week,u.className);
-  return {ok:false,error:'ROLE_NOT_ALLOWED'};
-}
-
-function adminDashboard_(ss,week) {
-  const rows = weekSummaryRows_(ss,week);
-  const report = ss.getSheetByName('BAO_CAO_TUAN');
-  const pendingReports=[];
-  if (report && report.getLastRow()>1) {
-    const data=report.getDataRange().getValues();
-    for (let r=data.length-1; r>=1; r--) {
-      if (Number(data[r][2])===week && String(data[r][7])==='Chờ duyệt') {
-        pendingReports.push({submissionId:String(data[r][0]),time:dateText_(data[r][1]),week,className:String(data[r][3]),minus:Number(data[r][4]),plus:Number(data[r][5]),score:Number(data[r][6]),username:String(data[r][8])});
-      }
-    }
-  }
-  return {
-    ok:true,role:'ADMIN',week,
-    metrics:{
-      submitted:rows.filter(x=>x.status!=='Chưa nộp').length,
-      pending:rows.filter(x=>x.status==='Chờ duyệt').length,
-      approved:rows.filter(x=>x.status==='Đã duyệt').length,
-      rejected:rows.filter(x=>x.status==='Từ chối').length,
-      notSubmitted:rows.filter(x=>x.status==='Chưa nộp').length,
-      totalClasses:CLASSES.length,
-      avgScore:round1_(rows.reduce((s,x)=>s+x.score,0)/CLASSES.length)
-    },
-    classes:rows,
-    pendingReports,
-    topViolations:topCriteria_(ss,week,'VI PHẠM',8),
-    topRewards:topCriteria_(ss,week,'KHEN THƯỞNG',6),
-    accounts:adminAccounts_(ss)
-  };
-}
-
-function teacherDashboard_(ss,week,className) {
-  const rows = weekSummaryRows_(ss,week);
-  const row = rows.find(x=>x.className===className) || {className,score:START_SCORE,minus:0,plus:0,status:'Chưa nộp',rank:1,violations:0,rewards:0};
-  const details = latestDetails_(ss,week,className);
-  const violations = details.filter(x=>x.group==='VI PHẠM');
-  const rewards = details.filter(x=>x.group==='KHEN THƯỞNG');
-  const trend=[];
-  for (let w=Math.max(1,week-5); w<=week; w++) {
-    syncWeekSummary_(ss,w);
-    const rr=weekSummaryRows_(ss,w).find(x=>x.className===className);
-    if (rr) trend.push({week:w,score:rr.score,rank:rr.rank,status:rr.status});
-  }
-  return {
-    ok:true,role:'GVCN',readOnly:true,week,className,
-    summary:row,
-    details,
-    violationDetails:violations,
-    rewardDetails:rewards,
-    issueSummary:groupDetails_(violations),
-    rewardSummary:groupDetails_(rewards),
-    people:peopleSummary_(details),
-    trend,
-    centerAverage:round1_(rows.reduce((s,x)=>s+x.score,0)/CLASSES.length)
-  };
+    let detailStart=0, detailCount=rows.length; if (rows.length) { detailStart = nextDetailRow_(detail); detail.getRange(detailStart,1,rows.length,9).setValues(rows.map(function(r){return r.main;})); detail.getRange(detailStart,15,rows.length,2).setValues(rows.map(function(r){return r.meta;})); }
+    const score = START_SCORE + plus + minus, reportRow = reportRow_(week,u.className), reportSheet = ss.getSheetByName('BAO_CAO_TUAN');
+    reportSheet.getRange(reportRow,1,1,15).setValues([[submissionId,now,week,u.className,minus,plus,score,'Chờ duyệt',u.username,String(b.note||''),detailStart,detailCount,violations,rewards,API_VERSION]]);
+    updateSummaryClass_(ss,week,u.className); invalidateWeekCache_(week); log_('SUBMIT',u.username+' '+u.className+' tuần '+week+' = '+score);
+    return {ok:true,submissionId:submissionId,score:score,status:'Chờ duyệt',minus:minus,plus:plus,overwritten:Boolean(old&&old.submissionId),home:leaderHome_(ss,u)};
+  } finally { lock.releaseLock(); }
 }
 
 function adminDecision_(b) {
-  const u=auth_(b.token);
-  if (u.role!=='ADMIN') return {ok:false,error:'ROLE_NOT_ALLOWED'};
-  const id=String(b.submissionId||'');
-  const decision=String(b.decision||'');
-  if (!id || !['Đã duyệt','Từ chối'].includes(decision)) return {ok:false,error:'INVALID_DECISION'};
-  const ss=SpreadsheetApp.openById(SPREADSHEET_ID);
-  const report=ss.getSheetByName('BAO_CAO_TUAN');
-  const detail=ss.getSheetByName('DATA_CHI_TIET');
-  if (!report) return {ok:false,error:'REPORT_SHEET_MISSING'};
-  const data=report.getDataRange().getValues();
-  let week=0, found=false;
-  for (let r=1; r<data.length; r++) {
-    if (String(data[r][0])===id) {
-      week=Number(data[r][2]);
-      report.getRange(r+1,8).setValue(decision);
-      found=true;
-      break;
-    }
-  }
-  if (!found) return {ok:false,error:'SUBMISSION_NOT_FOUND'};
-  if (detail && detail.getLastRow()>1) {
-    const ids=detail.getRange(2,15,detail.getLastRow()-1,1).getValues();
-    const statusRange=detail.getRange(2,8,ids.length,1);
-    const values=statusRange.getValues();
-    let changed=false;
-    for (let i=0; i<ids.length; i++) {
-      if (String(ids[i][0])===id) { values[i][0]=decision; changed=true; }
-    }
-    if (changed) statusRange.setValues(values);
-  }
-  SpreadsheetApp.flush();
-  syncWeekSummary_(ss,week);
-  log_('DECISION',u.username+' '+id+' -> '+decision);
-  return {ok:true,status:decision,week};
+  const u = auth_(b.token); if (u.role !== 'ADMIN') throw new Error('ROLE_NOT_ALLOWED');
+  const week=validWeek_(b.week), className=String(b.className||'').toUpperCase(); if (CLASSES.indexOf(className)<0) return {ok:false,error:'INVALID_CLASS'};
+  const decision=String(b.decision||''); if (['Đã duyệt','Từ chối'].indexOf(decision)<0) return {ok:false,error:'INVALID_DECISION'};
+  const ss=ss_(), row=reportRow_(week,className), sh=ss.getSheetByName('BAO_CAO_TUAN'), v=sh.getRange(row,1,1,15).getValues()[0]; if (!v[0]) return {ok:false,error:'SUBMISSION_NOT_FOUND'};
+  sh.getRange(row,8).setValue(decision); if (Number(v[10])>0 && Number(v[11])>0) ss.getSheetByName('DATA_CHI_TIET').getRange(Number(v[10]),8,Number(v[11]),1).setValue(decision);
+  updateSummaryClass_(ss,week,className); invalidateWeekCache_(week); log_('DECISION',u.username+' '+className+' T'+week+' -> '+decision); return {ok:true,status:decision,dashboard:adminDashboard_(ss,week)};
 }
 
-function adminSetPassword_(b) {
-  const u=auth_(b.token);
-  if (u.role!=='ADMIN') return {ok:false,error:'ROLE_NOT_ALLOWED'};
-  const username=normalizeUsername_(b.username);
-  const password=String(b.newPassword||'').trim();
-  if (!username) return {ok:false,error:'ACCOUNT_NOT_FOUND'};
-  if (password.length<6 || password.length>32) return {ok:false,error:'PASSWORD_FORMAT',message:'Mật khẩu phải từ 6 đến 32 ký tự.'};
-  const ss=SpreadsheetApp.openById(SPREADSHEET_ID);
-  const sh=ss.getSheetByName('TAI_KHOAN');
-  const data=sh.getDataRange().getValues();
-  for (let r=1; r<data.length; r++) {
-    if (String(data[r][0]||'').trim().toUpperCase()!==username) continue;
-    sh.getRange(r+1,2).setValue(hash_(password));
-    sh.getRange(r+1,7,1,2).clearContent();
-    if (sh.getMaxColumns()>=9) sh.getRange(r+1,9).setValue(false);
-    SpreadsheetApp.flush();
-    log_('PASSWORD_RESET',u.username+' reset '+username);
-    return {ok:true,username,selfChanged:username===u.username,message:'Đã cập nhật mật khẩu ngay.'};
-  }
-  return {ok:false,error:'ACCOUNT_NOT_FOUND'};
+function adminDashboard_(ss,week) {
+  ensureWeekSummary_(ss,week); const rows = weekSummaryRows_(ss,week), wi = weekInfo_(ss,week), pending = [];
+  const reportData = ss.getSheetByName('BAO_CAO_TUAN').getRange(reportRow_(week,CLASSES[0]),1,CLASSES.length,15).getValues();
+  for (let i=0;i<reportData.length;i++) { const r=reportData[i]; if (r[0] && String(r[7])==='Chờ duyệt') pending.push({className:String(r[3]),score:Number(r[6]),minus:Number(r[4]),plus:Number(r[5]),time:dateText_(r[1]),submissionId:String(r[0])}); }
+  const countedRows = rows.filter(function(x){return x.weekCounted;}); const avg = countedRows.length ? round1_(countedRows.reduce(function(s,x){return s+x.score;},0)/countedRows.length) : 0;
+  return {ok:true,role:'ADMIN',week:week,weekInfo:wi,metrics:{submitted:rows.filter(function(x){return x.status!=='Chưa nộp'&&x.status!=='Không tính';}).length,pending:rows.filter(function(x){return x.status==='Chờ duyệt';}).length,approved:rows.filter(function(x){return x.status==='Đã duyệt';}).length,notSubmitted:rows.filter(function(x){return x.status==='Chưa nộp';}).length,totalClasses:CLASSES.length,avgScore:avg},classes:rows,pendingReports:pending};
 }
 
-function adminAccounts_(ss) {
-  const sh=ss.getSheetByName('TAI_KHOAN');
-  if (!sh || sh.getLastRow()<2) return [];
-  const data=sh.getRange(2,1,sh.getLastRow()-1,6).getValues();
-  return data.filter(r=>r[0]).map(r=>({
-    username:String(r[0]),
-    className:String(r[2]||''),
-    role:String(r[3]||''),
-    displayName:String(r[4]||r[0]),
-    status:String(r[5]||'')
-  })).sort((a,b)=>roleOrder_(a.role)-roleOrder_(b.role) || a.className.localeCompare(b.className,'vi') || a.username.localeCompare(b.username));
+function adminAnalytics_(b) {
+  const u=auth_(b.token); if (u.role!=='ADMIN') throw new Error('ROLE_NOT_ALLOWED'); const ss=ss_(),week=validWeek_(b.week),cache=CacheService.getScriptCache(),key='analytics:'+week,hit=cache.get(key); if (hit) return JSON.parse(hit);
+  const topV={},topR={},reports=ss.getSheetByName('BAO_CAO_TUAN').getRange(reportRow_(week,CLASSES[0]),1,CLASSES.length,15).getValues();
+  reports.forEach(function(r){ const start=Number(r[10]||0),count=Number(r[11]||0); if (!r[0]||!start||!count) return; const details=ss.getSheetByName('DATA_CHI_TIET').getRange(start,1,count,16).getValues(); details.forEach(function(d){ if (String(d[7])==='Đã thay thế') return; const code=String(d[2]),name=String(d[9]||code),qty=Number(d[3]||0),amount=Number(d[13]||0),group=String(d[10]||''),target=group==='VI PHẠM'?topV:(group==='KHEN THƯỞNG'?topR:null); if (!target) return; if (!target[code]) target[code]={code:code,name:name,qty:0,amount:0}; target[code].qty+=qty; target[code].amount+=amount; }); });
+  const out={ok:true,week:week,topViolations:Object.values(topV).sort(function(a,b){return b.qty-a.qty;}).slice(0,8),topRewards:Object.values(topR).sort(function(a,b){return b.qty-a.qty;}).slice(0,8)}; cache.put(key,JSON.stringify(out),30); return out;
 }
 
-function roleOrder_(r) { return r==='ADMIN'?0:r==='GVCN'?1:2; }
-
-function groupDetails_(details) {
-  const m={};
-  details.forEach(x=>{
-    if (!m[x.code]) m[x.code]={code:x.code,name:x.name||x.code,qty:0,amount:0};
-    m[x.code].qty+=Number(x.qty||0);
-    m[x.code].amount+=Number(x.amount||0);
-  });
-  return Object.values(m).sort((a,b)=>b.qty-a.qty || Math.abs(b.amount)-Math.abs(a.amount));
+function teacherDashboard_(ss,week,className) {
+  ensureWeekSummary_(ss,week); const wi=weekInfo_(ss,week), summary=summaryRowObject_(ss,week,className), report=readReport_(ss,week,className), details=report&&report.submissionId?detailsForReport_(ss,report):[], weekRows=weekSummaryRows_(ss,week), counted=weekRows.filter(function(x){return x.weekCounted;}), centerAverage=counted.length?round1_(counted.reduce(function(s,x){return s+x.score;},0)/counted.length):0;
+  const trend=[],startWeek=Math.max(1,week-5),countWeeks=week-startWeek+1,block=ss.getSheetByName('TỔNG ĐIỂM').getRange(summaryRow_(startWeek,CLASSES[0]),1,countWeeks*CLASSES.length,12).getValues(),ci=CLASSES.indexOf(className);
+  for(let w=startWeek;w<=week;w++){ const r=block[(w-startWeek)*CLASSES.length+ci]; if(r&&r[0]) trend.push({week:w,score:Number(r[6]||200),rank:Number(r[8]||0),status:String(r[7]||'Chưa nộp')}); }
+  return {ok:true,role:'GVCN',week:week,weekInfo:wi,className:className,summary:summary,details:details,trend:trend,centerAverage:centerAverage,readOnly:true};
 }
 
-function peopleSummary_(details) {
-  const m={};
-  details.forEach(x=>{
-    const name=String(x.student||'').trim();
-    if (!name) return;
-    if (!m[name]) m[name]={name,violations:0,rewards:0,net:0,items:0};
-    const q=Number(x.qty||0);
-    if (x.group==='VI PHẠM') m[name].violations+=q;
-    if (x.group==='KHEN THƯỞNG') m[name].rewards+=q;
-    m[name].net+=Number(x.amount||0);
-    m[name].items++;
-  });
-  return Object.values(m).sort((a,b)=>b.violations-a.violations || b.rewards-a.rewards || a.name.localeCompare(b.name,'vi'));
+function adminAccounts_(b) { const u=auth_(b.token); if (u.role!=='ADMIN') throw new Error('ROLE_NOT_ALLOWED'); const sh=ss_().getSheetByName('TAI_KHOAN'),last=sh.getLastRow(); if(last<2)return{ok:true,accounts:[]}; const d=sh.getRange(2,1,last-1,9).getValues(),out=[]; d.forEach(function(r,i){if(r[0])out.push({row:i+2,username:String(r[0]),className:String(r[2]||''),role:String(r[3]||''),displayName:String(r[4]||''),status:String(r[5]||''),loggedIn:Boolean(r[6])});}); return {ok:true,accounts:out}; }
+function adminUpdateAccount_(b) {
+  const u=auth_(b.token); if (u.role!=='ADMIN') throw new Error('ROLE_NOT_ALLOWED'); const target=String(b.targetUsername||'').trim().toUpperCase(); if(!target)return{ok:false,error:'ACCOUNT_NOT_FOUND'};
+  const ss=ss_(),sh=ss.getSheetByName('TAI_KHOAN'),cell=sh.getRange('A:A').createTextFinder(target).matchEntireCell(true).findNext(); if(!cell||cell.getRow()<2)return{ok:false,error:'ACCOUNT_NOT_FOUND'};
+  const row=cell.getRow(),v=sh.getRange(row,1,1,9).getValues()[0],oldToken=String(v[6]||''); let username=String(b.username==null?v[0]:b.username).trim().toUpperCase().replace(/\s+/g,'');
+  if(!/^[A-Z0-9_]{3,30}$/.test(username))return{ok:false,error:'USERNAME_FORMAT'}; if(username!==target){const dup=sh.getRange('A:A').createTextFinder(username).matchEntireCell(true).findNext();if(dup&&dup.getRow()!==row)return{ok:false,error:'USERNAME_EXISTS'};}
+  let className=String(b.className==null?v[2]:b.className).trim().toUpperCase(),role=String(b.role==null?v[3]:b.role).trim().toUpperCase(); if(['LOP_TRUONG','GVCN','ADMIN'].indexOf(role)<0)return{ok:false,error:'ROLE_FORMAT'}; if(role==='ADMIN')className='ALL'; else if(CLASSES.indexOf(className)<0)return{ok:false,error:'INVALID_CLASS'};
+  const displayName=String(b.displayName==null?v[4]:b.displayName).trim()||username,status=String(b.status==null?v[5]:b.status); if(['Hoạt động','Khóa'].indexOf(status)<0)return{ok:false,error:'STATUS_FORMAT'};
+  let hash=String(v[1]),password=String(b.password||''); if(password){if(password.length<6||password.length>20)return{ok:false,error:'PASSWORD_FORMAT'};hash=hash_(password);}
+  sh.getRange(row,1,1,9).setValues([[username,hash,className,role,displayName,status,'','',String(v[8]||'')]]); if(oldToken)CacheService.getScriptCache().remove('tok:'+oldToken); const relogin=(target===u.username); log_('ACCOUNT',u.username+' cập nhật '+target+' -> '+username); return{ok:true,username:username,reLogin:relogin};
 }
 
-function syncWeekAction_(b) {
-  const u=auth_(b.token);
-  if (u.role!=='ADMIN') return {ok:false,error:'ROLE_NOT_ALLOWED'};
-  const week=validWeek_(b.week);
-  const ss=SpreadsheetApp.openById(SPREADSHEET_ID);
-  syncWeekSummary_(ss,week);
-  return {ok:true,week};
+function adminWeeks_(b) { const u=auth_(b.token); if(u.role!=='ADMIN')throw new Error('ROLE_NOT_ALLOWED'); return{ok:true,weeks:weekList_(ss_())}; }
+function adminUpdateWeek_(b) {
+  const u=auth_(b.token); if(u.role!=='ADMIN')throw new Error('ROLE_NOT_ALLOWED'); const week=validWeek_(b.week),control=String(b.control||'').toUpperCase(); if(WEEK_CONTROLS.indexOf(control)<0)return{ok:false,error:'WEEK_CONTROL_FORMAT'};
+  const ss=ss_(),sh=ss.getSheetByName('LỊCH TUẦN'); sh.getRange(week+1,4).setValue(control); sh.getRange(week+1,7).setValue(String(b.note||'')); sh.getRange(week+1,8,1,2).setValues([[u.username,new Date()]]); updateWeekSummaryStatus_(ss,week); invalidateWeekCache_(week); log_('WEEK',u.username+' T'+week+' -> '+control); return{ok:true,weekInfo:weekInfo_(ss,week),weeks:weekList_(ss),dashboard:adminDashboard_(ss,week)};
 }
 
-function syncWeekSummary_(ss,week) {
-  const sh=ensureSheet_(ss,'TỔNG ĐIỂM',['Tuần','Lớp','GVCN','Điểm nền','Điểm trừ','Điểm cộng','Tổng điểm','Trạng thái','Xếp hạng','Lượt vi phạm','Lượt khen thưởng','Cập nhật lúc']);
-  const gvcn=gvcnMap_(ss);
-  const latest=latestReportsMap_(ss,week);
-  const now=new Date();
-  const pre=[];
-  CLASSES.forEach(c=>{
-    const r=latest[c];
-    const valid=r && r.status!=='Từ chối';
-    const counts=r?detailCountsBySubmission_(ss,r.id):{violations:0,rewards:0};
-    pre.push({
-      className:c,gvcn:gvcn[c]||'',
-      score:valid?Number(r.score):START_SCORE,
-      minus:valid?Number(r.minus):0,
-      plus:valid?Number(r.plus):0,
-      status:r?r.status:'Chưa nộp',
-      violations:valid?counts.violations:0,
-      rewards:valid?counts.rewards:0,
-      time:r?r.time:now
-    });
-  });
-  pre.forEach(x=>x.rank=1+pre.filter(y=>y.score>x.score).length);
-  const start=2+(week-1)*CLASSES.length;
-  sh.getRange(start,1,CLASSES.length,12).setValues(pre.map(x=>[week,x.className,x.gvcn,START_SCORE,x.minus,x.plus,x.score,x.status,x.rank,x.violations,x.rewards,x.time]));
-  sh.getRange(1,1,1,12).setValues([['Tuần','Lớp','GVCN','Điểm nền','Điểm trừ','Điểm cộng','Tổng điểm','Trạng thái','Xếp hạng','Lượt vi phạm','Lượt khen thưởng','Cập nhật lúc']]);
-  sh.setFrozenRows(1);
+function weekList_(ss) { const sh=ss.getSheetByName('LỊCH TUẦN'); if(!sh)return[]; const d=sh.getRange(2,1,35,9).getValues(),out=[]; d.forEach(function(r){if(r[0])out.push(weekObjectFromRow_(r));}); return out; }
+function weekInfo_(ss,week) { const sh=ss.getSheetByName('LỊCH TUẦN'); if(!sh)throw new Error('INVALID_WEEK'); const r=sh.getRange(week+1,1,1,9).getValues()[0]; if(Number(r[0])!==week)throw new Error('INVALID_WEEK'); return weekObjectFromRow_(r); }
+function weekObjectFromRow_(r) {
+  const week=Number(r[0]),start=new Date(r[1]),end=new Date(r[2]),control=String(r[3]||'TỰ ĐỘNG').toUpperCase(),todayKey=ymdKey_(new Date()),startKey=ymdKey_(start),endKey=ymdKey_(end); let status='Chưa mở',counted=true,canReport=false;
+  if(control==='KHÔNG TÍNH'){status='Không tính';counted=false;} else if(control==='MỞ'){status='Đang mở';canReport=true;} else if(control==='KHÓA'){status='Đã khóa';} else if(todayKey<startKey){status='Chưa mở';} else if(todayKey>endKey){status='Đã khóa';} else{status='Đang mở';canReport=true;}
+  return{week:week,start:dateOnlyText_(start),end:dateOnlyText_(end),control:control,effectiveStatus:status,counted:counted,canReport:canReport,note:String(r[6]||''),updatedBy:String(r[7]||''),updatedAt:dateText_(r[8])};
 }
+function activeWeekInfo_(ss) { const list=weekList_(ss),open=list.filter(function(x){return x.canReport;}); if(open.length)return open[open.length-1]; const today=ymdKey_(new Date()); for(let i=0;i<list.length;i++){const s=ymdKey_(parseDMY_(list[i].start)),e=ymdKey_(parseDMY_(list[i].end));if(today>=s&&today<=e)return list[i];} if(today<ymdKey_(parseDMY_(list[0].start)))return list[0]; return list[list.length-1]; }
 
-function weekSummaryRows_(ss,week) {
-  const sh=ss.getSheetByName('TỔNG ĐIỂM');
-  const start=2+(week-1)*CLASSES.length;
-  if (!sh || sh.getLastRow()<start) return [];
-  return sh.getRange(start,1,CLASSES.length,12).getValues().map(r=>({
-    week:Number(r[0]),className:String(r[1]),gvcn:String(r[2]||''),base:Number(r[3]),minus:Number(r[4]),plus:Number(r[5]),score:Number(r[6]),status:String(r[7]),rank:Number(r[8]),violations:Number(r[9]),rewards:Number(r[10]),updated:dateText_(r[11])
-  }));
-}
+function reportRow_(week,className){return 2+(week-1)*CLASSES.length+CLASSES.indexOf(className);} function summaryRow_(week,className){return 2+(week-1)*CLASSES.length+CLASSES.indexOf(className);}
+function readReport_(ss,week,className) { const sh=ss.getSheetByName('BAO_CAO_TUAN'),row=reportRow_(week,className); if(!sh||row<2)return null; const r=sh.getRange(row,1,1,15).getValues()[0]; if(!r[0])return null; return{submissionId:String(r[0]),time:new Date(r[1]),week:Number(r[2]),className:String(r[3]),minus:Number(r[4]||0),plus:Number(r[5]||0),score:Number(r[6]||START_SCORE),status:String(r[7]||'Chờ duyệt'),username:String(r[8]||''),note:String(r[9]||''),detailStart:Number(r[10]||0),detailCount:Number(r[11]||0),violations:Number(r[12]||0),rewards:Number(r[13]||0),version:String(r[14]||'')}; }
+function emptyReport_(week,className,status){return{submissionId:'',week:week,className:className,minus:0,plus:0,score:START_SCORE,status:status==='Không tính'?'Không tính':'Chưa nộp',violations:0,rewards:0,time:null};}
+function detailsForReport_(ss,report) { if(!report.detailStart||!report.detailCount)return[]; const d=ss.getSheetByName('DATA_CHI_TIET').getRange(report.detailStart,1,report.detailCount,16).getValues(),out=[]; d.forEach(function(r){if(String(r[14])===report.submissionId)out.push({code:String(r[2]),qty:Number(r[3]||0),student:String(r[4]||''),date:dateText_(r[5]),dateInput:dateInput_(r[5]),note:String(r[6]||''),status:String(r[7]||''),name:String(r[9]||r[2]),group:String(r[10]||''),unit:String(r[11]||''),point:Number(r[12]||0),amount:Number(r[13]||0)});}); return out; }
+function archiveReport_(ss,r,replacedBy,reason) { const sh=ss.getSheetByName('NHAT_KY_BAO_CAO'); if(sh)sh.appendRow([new Date(),r.submissionId,r.week,r.className,r.minus,r.plus,r.score,r.status,r.username,r.note,replacedBy,reason]); }
+function markDetailsReplaced_(ss,r) { if(r.detailStart&&r.detailCount)ss.getSheetByName('DATA_CHI_TIET').getRange(r.detailStart,8,r.detailCount,1).setValue('Đã thay thế'); }
 
-function latestReportsMap_(ss,week) {
-  const sh=ss.getSheetByName('BAO_CAO_TUAN');
-  const m={};
-  if (!sh || sh.getLastRow()<2) return m;
-  const data=sh.getDataRange().getValues();
-  for (let r=data.length-1; r>=1; r--) {
-    const className=String(data[r][3]);
-    const status=String(data[r][7]);
-    if (Number(data[r][2])!==week || !CLASSES.includes(className) || status==='Đã thay thế' || m[className]) continue;
-    m[className]={id:String(data[r][0]),time:new Date(data[r][1]),minus:Number(data[r][4]),plus:Number(data[r][5]),score:Number(data[r][6]),status,username:String(data[r][8]||''),note:String(data[r][9]||'')};
-  }
-  return m;
-}
-
-function latestWeekStatus_(ss,week,className) {
-  const r=latestReportsMap_(ss,week)[className];
-  return r ? {ok:true,status:r.status,score:r.score,submissionId:r.id,minus:r.minus,plus:r.plus,submittedAt:dateText_(r.time),note:r.note} : {ok:true,status:null,score:START_SCORE,minus:0,plus:0,details:[]};
-}
-
-function latestDetails_(ss,week,className) {
-  const r=latestReportsMap_(ss,week)[className];
-  if (!r) return [];
-  const sh=ss.getSheetByName('DATA_CHI_TIET');
-  if (!sh || sh.getLastRow()<2) return [];
-  const data=sh.getRange(2,1,sh.getLastRow()-1,16).getValues();
-  const out=[];
-  for (let i=0; i<data.length; i++) {
-    if (String(data[i][14])!==r.id) continue;
-    out.push({
-      code:String(data[i][2]),qty:Number(data[i][3]),student:String(data[i][4]||''),date:dateText_(data[i][5]),note:String(data[i][6]||''),status:String(data[i][7]),name:String(data[i][9]||''),group:String(data[i][10]||''),point:Number(data[i][12]),amount:Number(data[i][13])
-    });
-  }
-  return out;
-}
-
-function detailCountsBySubmission_(ss,id) {
-  const sh=ss.getSheetByName('DATA_CHI_TIET');
-  let violations=0,rewards=0;
-  if (!sh || sh.getLastRow()<2) return {violations,rewards};
-  const data=sh.getRange(2,4,sh.getLastRow()-1,12).getValues();
-  for (let i=0; i<data.length; i++) {
-    if (String(data[i][11])!==id) continue;
-    const qty=Number(data[i][0]||0), group=String(data[i][7]||'');
-    if (group==='VI PHẠM') violations+=qty;
-    else if (group==='KHEN THƯỞNG') rewards+=qty;
-  }
-  return {violations,rewards};
-}
-
-function topCriteria_(ss,week,group,limit) {
-  const sh=ss.getSheetByName('DATA_CHI_TIET');
-  const m={};
-  if (!sh || sh.getLastRow()<2) return [];
-  const data=sh.getRange(2,1,sh.getLastRow()-1,14).getValues();
-  for (let i=0; i<data.length; i++) {
-    if (Number(data[i][0])!==week || String(data[i][10])!==group || !['Chờ duyệt','Đã duyệt'].includes(String(data[i][7]))) continue;
-    const code=String(data[i][2]),qty=Number(data[i][3]||0);
-    if (!m[code]) m[code]={code,name:String(data[i][9]||code),qty:0,amount:0};
-    m[code].qty+=qty;
-    m[code].amount+=Number(data[i][13]||0);
-  }
-  return Object.values(m).sort((a,b)=>b.qty-a.qty).slice(0,limit);
-}
-
-function gvcnMap_(ss) {
-  const sh=ss.getSheetByName('CAU_HINH');
-  const m={};
-  if (!sh) return m;
-  sh.getRange(2,2,17,4).getValues().forEach(r=>{ if (r[0]) m[String(r[0])]=String(r[3]||''); });
-  return m;
-}
-
-function validWeek_(w) {
-  w=Math.floor(Number(w));
-  if (w<1 || w>35) throw new Error('INVALID_WEEK');
-  return w;
-}
-
-function criteriaMap_(ss) {
-  const sh=ss.getSheetByName('DM_TIEU_CHI');
-  if (!sh) throw new Error('MISSING_CRITERIA_SHEET');
-  const data=sh.getDataRange().getValues(), m={};
-  for (let r=1; r<data.length; r++) if (data[r][0]) m[String(data[r][0]).trim().toUpperCase()]={name:String(data[r][1]),unit:String(data[r][2]),point:Number(data[r][3]),group:String(data[r][4])};
-  return m;
-}
-
-function markOldDetails_(sh,week,className) {
-  if (sh.getLastRow()<2) return;
-  const data=sh.getRange(2,1,sh.getLastRow()-1,16).getValues();
-  for (let r=0; r<data.length; r++) {
-    if (Number(data[r][0])===week && String(data[r][1])===className && String(data[r][7])==='Chờ duyệt') sh.getRange(r+2,8).setValue('Đã thay thế');
-  }
-}
-
-function nextDetailRow_(sh) {
-  const last=sh.getLastRow();
-  if (last<2) return 2;
-  const col=sh.getRange(2,1,Math.max(1,last-1),1).getValues();
-  for (let i=col.length-1; i>=0; i--) if (col[i][0]!=='') return i+3;
-  return 2;
-}
-
-function ensureDataColumns_(ss) {
-  const sh=ss.getSheetByName('DATA_CHI_TIET');
-  if (!sh) throw new Error('Không thấy DATA_CHI_TIET');
-  sh.getRange(1,10,1,7).setValues([['Nội dung','Nhóm','Quy cách','Mức điểm','Thành điểm','SubmissionID','Tạo lúc']]);
-  if (!sh.getRange('J2').getFormula()) sh.getRange('J2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,2,FALSE),"")))');
-  if (!sh.getRange('K2').getFormula()) sh.getRange('K2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,5,FALSE),"")))');
-  if (!sh.getRange('L2').getFormula()) sh.getRange('L2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,3,FALSE),"")))');
-  if (!sh.getRange('M2').getFormula()) sh.getRange('M2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,4,FALSE),"")))');
-  if (!sh.getRange('N2').getFormula()) sh.getRange('N2').setFormula('=ARRAYFORMULA(IF((M2:M="")+(D2:D=""),"",M2:M*D2:D))');
-}
-
-function ensureSheet_(ss,name,headers) {
-  let sh=ss.getSheetByName(name);
-  if (!sh) sh=ss.insertSheet(name);
-  if (sh.getLastRow()===0 || !sh.getRange(1,1).getValue()) sh.getRange(1,1,1,headers.length).setValues([headers]);
-  return sh;
-}
-
-function hash_(s) {
-  const bytes=Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,String(s),Utilities.Charset.UTF_8);
-  return bytes.map(b=>('0'+((b<0?b+256:b).toString(16))).slice(-2)).join('');
-}
-
-function dateText_(v) {
-  if (!v) return '';
-  const d=new Date(v);
-  return isNaN(d.getTime()) ? String(v) : Utilities.formatDate(d,'Asia/Ho_Chi_Minh','dd/MM/yyyy HH:mm');
-}
-
-function round1_(n) { return Math.round(Number(n||0)*10)/10; }
-
-function log_(type,msg) {
-  try {
-    const ss=SpreadsheetApp.openById(SPREADSHEET_ID), sh=ss.getSheetByName('API_LOG');
-    if (sh) sh.appendRow([new Date(),type,msg]);
-  } catch(e) {}
-}
-
-function json_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
-}
+function updateSummaryClass_(ss,week,className) { const sh=ss.getSheetByName('TỔNG ĐIỂM'),wi=weekInfo_(ss,week),r=readReport_(ss,week,className),gv=gvcnForClass_(ss,className),row=summaryRow_(week,className),has=Boolean(r&&r.submissionId),status=!wi.counted?'Không tính':(has?r.status:'Chưa nộp'),score=has?r.score:START_SCORE,minus=has?r.minus:0,plus=has?r.plus:0,viol=has?r.violations:0,rewards=has?r.rewards:0,time=has?r.time:new Date(); sh.getRange(row,1,1,12).setValues([[week,className,gv,START_SCORE,minus,plus,score,status,'',viol,rewards,time]]); recalcRanks_(ss,week); }
+function ensureWeekSummary_(ss,week) { const sh=ss.getSheetByName('TỔNG ĐIỂM'),start=summaryRow_(week,CLASSES[0]); if(!sh.getRange(start,1).getValue()){const wi=weekInfo_(ss,week),rows=CLASSES.map(function(c){return[week,c,gvcnForClass_(ss,c),START_SCORE,0,0,START_SCORE,wi.counted?'Chưa nộp':'Không tính','',0,0,new Date()];});sh.getRange(start,1,CLASSES.length,12).setValues(rows);recalcRanks_(ss,week);} }
+function updateWeekSummaryStatus_(ss,week) { ensureWeekSummary_(ss,week); CLASSES.forEach(function(c){const r=readReport_(ss,week,c),wi=weekInfo_(ss,week),row=summaryRow_(week,c),sh=ss.getSheetByName('TỔNG ĐIỂM');sh.getRange(row,8).setValue(!wi.counted?'Không tính':(r?r.status:'Chưa nộp'));}); recalcRanks_(ss,week); }
+function recalcRanks_(ss,week) { const sh=ss.getSheetByName('TỔNG ĐIỂM'),start=summaryRow_(week,CLASSES[0]),d=sh.getRange(start,7,CLASSES.length,2).getValues(),eligible=d.map(function(r,i){return{idx:i,score:Number(r[0]||START_SCORE),status:String(r[1]||'')};}).filter(function(x){return x.status!=='Không tính';}),vals=d.map(function(){return[''];}); eligible.forEach(function(x){vals[x.idx][0]=1+eligible.filter(function(y){return y.score>x.score;}).length;}); sh.getRange(start,9,CLASSES.length,1).setValues(vals); }
+function weekSummaryRows_(ss,week) { ensureWeekSummary_(ss,week); const wi=weekInfo_(ss,week),start=summaryRow_(week,CLASSES[0]),d=ss.getSheetByName('TỔNG ĐIỂM').getRange(start,1,CLASSES.length,12).getValues(); return d.map(function(r){return{week:Number(r[0]),className:String(r[1]),gvcn:String(r[2]||''),base:Number(r[3]||START_SCORE),minus:Number(r[4]||0),plus:Number(r[5]||0),score:Number(r[6]||START_SCORE),status:String(r[7]||'Chưa nộp'),rank:Number(r[8]||0),violations:Number(r[9]||0),rewards:Number(r[10]||0),updated:dateText_(r[11]),weekCounted:wi.counted};}); }
+function summaryRowObject_(ss,week,className) { ensureWeekSummary_(ss,week); const r=ss.getSheetByName('TỔNG ĐIỂM').getRange(summaryRow_(week,className),1,1,12).getValues()[0]; return{week:Number(r[0]),className:String(r[1]),gvcn:String(r[2]||''),base:Number(r[3]||START_SCORE),minus:Number(r[4]||0),plus:Number(r[5]||0),score:Number(r[6]||START_SCORE),status:String(r[7]||'Chưa nộp'),rank:Number(r[8]||0),violations:Number(r[9]||0),rewards:Number(r[10]||0),updated:dateText_(r[11])}; }
+function gvcnForClass_(ss,className) { const sh=ss.getSheetByName('CAU_HINH'); if(!sh)return''; const cell=sh.getRange('B:B').createTextFinder(className).matchEntireCell(true).findNext(); return cell?String(sh.getRange(cell.getRow(),5).getValue()||''):''; }
+function criteriaList_(ss) { const cache=CacheService.getScriptCache(),key='criteria-v3',hit=cache.get(key); if(hit){try{return JSON.parse(hit);}catch(e){}} const d=ss.getSheetByName('DM_TIEU_CHI').getDataRange().getValues(),out=[]; for(let r=1;r<d.length;r++)if(d[r][0])out.push({code:String(d[r][0]),name:String(d[r][1]),unit:String(d[r][2]),point:Number(d[r][3]),group:String(d[r][4])}); cache.put(key,JSON.stringify(out),21600); return out; }
+function criteriaMap_(ss){const m={};criteriaList_(ss).forEach(function(c){m[c.code]=c;});return m;}
+function nextDetailRow_(sh) { const last=sh.getLastRow(); if(last<2)return 2; const a=sh.getRange(2,1,last-1,1).getValues(); for(let i=a.length-1;i>=0;i--)if(a[i][0]!=='')return i+3; return 2; }
+function ensureDataColumns_(ss) { const sh=ss.getSheetByName('DATA_CHI_TIET'); if(!sh)throw new Error('Không thấy DATA_CHI_TIET'); sh.getRange(1,10,1,7).setValues([['Nội dung','Nhóm','Quy cách','Mức điểm','Thành điểm','SubmissionID','Tạo lúc']]); if(!sh.getRange('J2').getFormula())sh.getRange('J2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,2,FALSE),"")))'); if(!sh.getRange('K2').getFormula())sh.getRange('K2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,5,FALSE),"")))'); if(!sh.getRange('L2').getFormula())sh.getRange('L2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,3,FALSE),"")))'); if(!sh.getRange('M2').getFormula())sh.getRange('M2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,4,FALSE),"")))'); if(!sh.getRange('N2').getFormula())sh.getRange('N2').setFormula('=ARRAYFORMULA(IF((M2:M="")+(D2:D=""),"",M2:M*D2:D))'); }
+function invalidateWeekCache_(week){CacheService.getScriptCache().remove('analytics:'+week);} function validWeek_(w){w=Math.floor(Number(w));if(w<1||w>35)throw new Error('INVALID_WEEK');return w;} function ss_(){return SpreadsheetApp.openById(SPREADSHEET_ID);} function ensureSheet_(ss,name,headers){let sh=ss.getSheetByName(name);if(!sh)sh=ss.insertSheet(name);if(!sh.getRange(1,1).getValue())sh.getRange(1,1,1,headers.length).setValues([headers]);return sh;}
+function hash_(s){const bytes=Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,String(s),Utilities.Charset.UTF_8);return bytes.map(function(b){return('0'+((b<0?b+256:b).toString(16))).slice(-2);}).join('');} function ymdKey_(d){return Utilities.formatDate(new Date(d),'Asia/Ho_Chi_Minh','yyyyMMdd');} function dateText_(v){if(!v)return'';const d=new Date(v);return isNaN(d.getTime())?String(v):Utilities.formatDate(d,'Asia/Ho_Chi_Minh','dd/MM/yyyy HH:mm');} function dateOnlyText_(v){if(!v)return'';const d=new Date(v);return isNaN(d.getTime())?String(v):Utilities.formatDate(d,'Asia/Ho_Chi_Minh','dd/MM/yyyy');} function dateInput_(v){if(!v)return'';const d=new Date(v);return isNaN(d.getTime())?'':Utilities.formatDate(d,'Asia/Ho_Chi_Minh','yyyy-MM-dd');} function parseDMY_(s){const p=String(s||'').split('/');return p.length===3?new Date(Number(p[2]),Number(p[1])-1,Number(p[0])):new Date(s);} function round1_(n){return Math.round(Number(n||0)*10)/10;} function log_(type,msg){try{const sh=ss_().getSheetByName('API_LOG');if(sh)sh.appendRow([new Date(),type,msg]);}catch(e){}} function json_(obj){return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);}
