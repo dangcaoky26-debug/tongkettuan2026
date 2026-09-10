@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -29,7 +30,7 @@ import okhttp3.Response;
 
 public class MainActivity extends Activity {
     private static final String API_URL = "https://script.google.com/macros/s/AKfycbzgyZkUcSWPaO1PYZ_RWUyeS0KXnT9A9FZ_g_wcLQqknf7uYUt1NAXLapHMdIeY_gmq/exec";
-    private static final String APP_VERSION = "1.6.0";
+    private static final String APP_VERSION = "1.6.2";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
     private static final int MAX_REDIRECTS = 8;
@@ -59,6 +60,7 @@ public class MainActivity extends Activity {
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
         webView.clearCache(true);
         webView.setWebViewClient(new WebViewClient());
+        webView.setWebChromeClient(new WebChromeClient());
         webView.addJavascriptInterface(new AppBridge(this), "Android");
         webView.loadUrl("file:///android_asset/index.html?v=" + APP_VERSION);
     }
