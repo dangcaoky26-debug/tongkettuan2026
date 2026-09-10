@@ -28,6 +28,47 @@
     };
   }
 
+  function normalizeLoginName(value){
+    let s=String(value||'').trim().toUpperCase().replace(/\s+/g,'').replace(/-/g,'');
+    if(/^((10[A-E])|(11[A-E])|(12[A-G]))$/.test(s)) s='LT'+s;
+    if(/^GVCN((10[A-E])|(11[A-E])|(12[A-G]))$/.test(s)) s='GV'+s.slice(4);
+    return s;
+  }
+
+  if(typeof login==='function'){
+    login=async function(){
+      const raw=($('#user')?.value||'').trim();
+      const password=$('#password')?.value||'';
+      if(!raw||!password)return toast('Nhập đầy đủ tài khoản và mật khẩu');
+      const username=normalizeLoginName(raw);
+      setBusy(true);
+      const r=await api({action:'login',username,password,pin:password},65000);
+      setBusy(false);
+      if(!r.ok)return toast(err(r));
+      S.session={token:r.token,username:r.username,role:r.role,className:r.className,displayName:r.displayName};
+      S.home=r.home||null; S.weeks=r.weeks||[];
+      S.week=S.home?.weekInfo?.week||S.home?.week?.week||S.home?.week||1;
+      if(r.role==='LOP_TRUONG'){
+        S.screen='leader';
+        if(S.home) applyLeaderHome(S.home);
+        else {
+          const h=await safeApi({action:'leaderHome'},65000);
+          if(!h||!h.ok){switchAccount();return toast(h?err(h):'Vui lòng đăng nhập lại');}
+          applyLeaderHome(h.home);
+        }
+      }else if(r.role==='GVCN'){
+        S.screen='teacher';
+        if(S.home) S.cache.teacher[S.week]=S.home;
+      }else if(r.role==='ADMIN'){
+        S.screen='admin';
+        if(S.home) S.cache.admin[S.week]=S.home;
+      }else{
+        switchAccount(); return toast('Tài khoản chưa được phân quyền');
+      }
+      render();
+    };
+  }
+
   if(typeof loginView==='function'){
     loginView=function(){
       return `<main class="shell login">
@@ -43,7 +84,7 @@
             <button type="button" id="togglePassword" class="passwordToggle" aria-label="Hiện mật khẩu" aria-pressed="false">Hiện</button>
           </div>
           <button id="loginBtn" class="btn primary">Đăng nhập</button>
-          <div class="helper cleanHelper">Sử dụng tài khoản đã được cấp cho lớp hoặc giáo viên.</div>
+          <div class="helper cleanHelper">Sử dụng tài khoản đã được cấp.</div>
         </section>
       </main>`;
     };
@@ -65,9 +106,7 @@
     while((n=walker.nextNode())){
       let t=n.nodeValue||'';
       for(const [a,b] of replacements) if(t.includes(a)) t=t.split(a).join(b);
-      if(/\b(API|Web App|token|server|máy chủ)\b/i.test(t)){
-        t=t.replace(/\b(API|Web App|token|server|máy chủ)\b/gi,'hệ thống');
-      }
+      if(/\b(API|Web App|token|server|máy chủ)\b/i.test(t)) t=t.replace(/\b(API|Web App|token|server|máy chủ)\b/gi,'hệ thống');
       n.nodeValue=t;
     }
   }
@@ -87,12 +126,7 @@
 
   if(typeof render==='function'){
     const originalRender=render;
-    render=function(){
-      originalRender();
-      cleanTechnicalText();
-    };
+    render=function(){originalRender();cleanTechnicalText();};
     render();
-  }else{
-    cleanTechnicalText();
-  }
+  }else cleanTechnicalText();
 })();
