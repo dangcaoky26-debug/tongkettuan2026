@@ -1,0 +1,23 @@
+name: Check Apps Script API
+
+on:
+  push:
+    paths:
+      - '.github/workflows/api-check.yml'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check GET health
+        run: |
+          set -x
+          curl -i -L --max-time 30 'https://script.google.com/macros/s/AKfycbzgyZkUcSWPaO1PYZ_RWUyeS0KXnT9A9FZ_g_wcLQqknf7uYUt1NAXLapHMdIeY_gmq/exec'
+      - name: Check POST route with dummy credentials
+        run: |
+          set -x
+          curl -i -L --max-time 30 \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data '{"action":"login","username":"__TEST__","pin":"000000"}' \
+            'https://script.google.com/macros/s/AKfycbzgyZkUcSWPaO1PYZ_RWUyeS0KXnT9A9FZ_g_wcLQqknf7uYUt1NAXLapHMdIeY_gmq/exec'
