@@ -5,7 +5,7 @@
  * One active record per Lớp + Tuần. Resubmission overwrites current record.
  */
 const SPREADSHEET_ID = '1iarqsBIYbot9KD0UQAhZcwlQEiJZhSHxQk8NP1496g4';
-const API_VERSION = '3.1.1';
+const API_VERSION = '3.1.2';
 const CRITERIA_VERSION = '2026.09.10-56';
 const START_SCORE = 200;
 const TOKEN_DAYS = 30;
@@ -68,8 +68,6 @@ function login_(b) {
   const row = cell.getRow(), v = sh.getRange(row,1,1,9).getValues()[0];
   if (String(v[5] || '') !== 'Hoạt động') return {ok:false,error:'ACCOUNT_LOCKED'};
 
-  // PHAT_TAI_KHOAN is the user-managed password source. If it was edited
-  // directly in the Sheet, synchronize the hash before validating login.
   syncIssuedPasswordForLogin_(ss,username,sh,row,v);
   if (String(v[1] || '') !== hash_(password)) return {ok:false,error:'LOGIN_FAILED'};
   const role = String(v[3] || 'LOP_TRUONG').toUpperCase();
@@ -192,13 +190,14 @@ function submit_(b) {
       if (amount>=0) { plus+=amount; rewards+=qty; } else { minus+=amount; violations+=qty; }
       let d=now;
       if (x.date) { const p=new Date(String(x.date)+'T12:00:00'); if(!isNaN(p.getTime()))d=p; }
-      rows.push({main:[week,u.className,code,qty,String(x.student||''),d,String(x.note||''),'Chờ duyệt',u.username],meta:[submissionId,now]});
+      rows.push({left:[week,u.className,code],right:[qty,String(x.student||''),d,String(x.note||''),'Chờ duyệt',u.username],meta:[submissionId,now]});
     });
 
     let detailStart=0, detailCount=rows.length;
     if (rows.length) {
       detailStart = reserveDetailRows_(detail,rows.length);
-      detail.getRange(detailStart,1,rows.length,9).setValues(rows.map(function(r){return r.main;}));
+      detail.getRange(detailStart,1,rows.length,3).setValues(rows.map(function(r){return r.left;}));
+      detail.getRange(detailStart,5,rows.length,6).setValues(rows.map(function(r){return r.right;}));
       detail.getRange(detailStart,15,rows.length,2).setValues(rows.map(function(r){return r.meta;}));
     }
 
@@ -224,7 +223,7 @@ function adminDecision_(b) {
   if (!v[0]) return {ok:false,error:'SUBMISSION_NOT_FOUND'};
   sh.getRange(row,8).setValue(decision);
   const start=Number(v[10]||0), count=Number(v[11]||0);
-  if (start>0 && count>0) ss.getSheetByName('DATA_CHI_TIET').getRange(start,8,count,1).setValue(decision);
+  if (start>0 && count>0) ss.getSheetByName('DATA_CHI_TIET').getRange(start,9,count,1).setValue(decision);
   updateSummaryClass_(ss,week,className);
   invalidateWeekCache_(week);
   log_('DECISION',u.username+' '+className+' T'+week+' -> '+decision);
@@ -281,10 +280,10 @@ function adminAnalytics_(b) {
   if (sh && sh.getLastRow()>=2) {
     const d=sh.getRange(2,1,sh.getLastRow()-1,16).getValues();
     d.forEach(function(r){
-      if (!activeIds[String(r[14]||'')] || String(r[7])==='Đã thay thế') return;
+      if (!activeIds[String(r[14]||'')] || String(r[8])==='Đã thay thế') return;
       const group=String(r[10]||''), target=group==='VI PHẠM'?topV:(group==='KHEN THƯỞNG'?topR:null);
       if (!target) return;
-      const code=String(r[2]), name=String(r[9]||code), qty=Number(r[3]||0), amount=Number(r[13]||0);
+      const code=String(r[2]), name=String(r[3]||code), qty=Number(r[4]||0), amount=Number(r[13]||0);
       if (!target[code]) target[code]={code:code,name:name,qty:0,amount:0};
       target[code].qty+=qty; target[code].amount+=amount;
     });
@@ -443,7 +442,7 @@ function detailsForReport_(ss,report) {
   if(!report.detailStart||!report.detailCount) return [];
   const d=ss.getSheetByName('DATA_CHI_TIET').getRange(report.detailStart,1,report.detailCount,16).getValues(), out=[];
   d.forEach(function(r){
-    if(String(r[14])===report.submissionId) out.push({code:String(r[2]),qty:Number(r[3]||0),student:String(r[4]||''),date:dateText_(r[5]),dateInput:dateInput_(r[5]),note:String(r[6]||''),status:String(r[7]||''),name:String(r[9]||r[2]),group:String(r[10]||''),unit:String(r[11]||''),point:Number(r[12]||0),amount:Number(r[13]||0)});
+    if(String(r[14])===report.submissionId) out.push({code:String(r[2]),qty:Number(r[4]||0),student:String(r[5]||''),date:dateText_(r[6]),dateInput:dateInput_(r[6]),note:String(r[7]||''),status:String(r[8]||''),name:String(r[3]||r[2]),group:String(r[10]||''),unit:String(r[11]||''),point:Number(r[12]||0),amount:Number(r[13]||0)});
   });
   return out;
 }
@@ -454,7 +453,7 @@ function archiveReport_(ss,r,replacedBy,reason) {
 }
 
 function markDetailsReplaced_(ss,r) {
-  if(r.detailStart&&r.detailCount) ss.getSheetByName('DATA_CHI_TIET').getRange(r.detailStart,8,r.detailCount,1).setValue('Đã thay thế');
+  if(r.detailStart&&r.detailCount) ss.getSheetByName('DATA_CHI_TIET').getRange(r.detailStart,9,r.detailCount,1).setValue('Đã thay thế');
 }
 
 function updateSummaryClass_(ss,week,className) {
@@ -546,14 +545,14 @@ function reserveDetailRows_(sh,count) {
 function ensureDataColumns_(ss) {
   const sh=ss.getSheetByName('DATA_CHI_TIET');
   if(!sh) throw new Error('Không thấy DATA_CHI_TIET');
-  sh.getRange(1,10,1,7).setValues([['Nội dung','Nhóm','Quy cách','Mức điểm','Thành điểm','SubmissionID','Tạo lúc']]);
-  if(!sh.getRange('J2').getFormula()) sh.getRange('J2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,2,FALSE),"")))');
+  sh.getRange(1,4).setValue('Nội dung vi phạm');
+  sh.getRange(1,11,1,6).setValues([['Nhóm','Quy cách','Mức điểm','Thành điểm','SubmissionID','Tạo lúc']]);
+  if(!sh.getRange('D2').getFormula()) sh.getRange('D2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,2,FALSE),"")))');
   if(!sh.getRange('K2').getFormula()) sh.getRange('K2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,5,FALSE),"")))');
   if(!sh.getRange('L2').getFormula()) sh.getRange('L2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,3,FALSE),"")))');
   if(!sh.getRange('M2').getFormula()) sh.getRange('M2').setFormula('=ARRAYFORMULA(IF(C2:C="","",IFNA(VLOOKUP(C2:C,DM_TIEU_CHI!A:E,4,FALSE),"")))');
-  if(!sh.getRange('N2').getFormula()) sh.getRange('N2').setFormula('=ARRAYFORMULA(IF((M2:M="")+(D2:D=""),"",M2:M*D2:D))');
+  if(!sh.getRange('N2').getFormula()) sh.getRange('N2').setFormula('=ARRAYFORMULA(IF((M2:M="")+(E2:E=""),"",M2:M*E2:E))');
 }
-
 
 /**
  * Đồng bộ mật khẩu khi chỉnh trực tiếp PHAT_TAI_KHOAN.
