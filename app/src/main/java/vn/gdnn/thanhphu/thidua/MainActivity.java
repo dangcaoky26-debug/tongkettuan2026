@@ -19,15 +19,32 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 
 public class MainActivity extends Activity {
     private static final String API_URL = "https://script.google.com/macros/s/AKfycbzgyZkUcSWPaO1PYZ_RWUyeS0KXnT9A9FZ_g_wcLQqknf7uYUt1NAXLapHMdIeY_gmq/exec";
+    private static final String APP_VERSION = "1.2.0";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
-    private static final int MAX_REDIRECTS = 5;
+    private static final int MAX_REDIRECTS = 8;
 
     private WebView webView;
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
+    private final OkHttpClient httpClient = new OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
+            .callTimeout(40, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .retryOnConnectionFailure(true)
+            .build();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -40,10 +57,11 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setAllowFileAccess(true);
-        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        webView.clearCache(true);
         webView.setWebViewClient(new WebViewClient());
         webView.addJavascriptInterface(new AppBridge(this), "Android");
-        webView.loadUrl("file:///android_asset/index.html");
+        webView.loadUrl("file:///android_asset/index.html?v=" + APP_VERSION);
     }
 
     @Override
@@ -74,7 +92,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String getAppVersion() {
-            return "1.1.1";
+            return APP_VERSION;
         }
 
         @JavascriptInterface
@@ -83,29 +101,54 @@ public class MainActivity extends Activity {
             final String body = jsonBody == null ? "{}" : jsonBody;
 
             executor.execute(() -> {
+                String response;
                 try {
-                    String response = postAppsScript(body);
-                    callback(rid, response);
-                } catch (Exception ex) {
-                    String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
-                    callback(rid, "{\"ok\":false,\"error\":\"NETWORK_ERROR\",\"message\":" + JSONObject.quote(msg) + "}");
+                    response = postWithOkHttp(body);
+                    if (looksLikeTransportError(response)) {
+                        response = postWithUrlConnection(body);
+                    }
+                } catch (Exception first) {
+                    try {
+                        response = postWithUrlConnection(body);
+                    } catch (Exception second) {
+                        String msg = second.getMessage() == null ? second.getClass().getSimpleName() : second.getMessage();
+                        response = errorJson("NETWORK_ERROR", 0, msg);
+                    }
                 }
+                callback(rid, response);
             });
         }
 
+        private String postWithOkHttp(String body) throws Exception {
+            MediaType type = MediaType.get("text/plain; charset=utf-8");
+            RequestBody requestBody = RequestBody.create(body, type);
+            Request request = new Request.Builder()
+                    .url(API_URL)
+                    .post(requestBody)
+                    .header("Accept", "application/json, text/plain, */*")
+                    .header("Cache-Control", "no-cache")
+                    .header("User-Agent", "ThiDuaTuan-Android/" + APP_VERSION)
+                    .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                int code = response.code();
+                String raw = response.body() == null ? "" : response.body().string().trim();
+                return validateResponse(raw, code);
+            }
+        }
+
         /**
-         * Google Apps Script ContentService thường trả HTTP 302 sau POST rồi chuyển tới
-         * script.googleusercontent.com. Android HttpURLConnection không xử lý POST->302
-         * nhất quán trên mọi phiên bản, vì vậy ta theo redirect thủ công: POST lần đầu,
-         * sau đó GET URL Location để lấy JSON cuối cùng.
+         * Fallback cho một số máy Android/WebView cũ: tự theo chuỗi POST -> 302/303 -> GET
+         * của Google Apps Script ContentService.
          */
-        private String postAppsScript(String body) throws Exception {
+        private String postWithUrlConnection(String body) throws Exception {
             HttpURLConnection conn = null;
             try {
                 conn = open(API_URL, "POST");
                 conn.setDoOutput(true);
-                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
                 conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+                conn.setRequestProperty("Cache-Control", "no-cache");
 
                 byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
                 conn.setFixedLengthStreamingMode(bytes.length);
@@ -118,7 +161,7 @@ public class MainActivity extends Activity {
                 if (isRedirect(code)) {
                     String location = conn.getHeaderField("Location");
                     if (location == null || location.trim().isEmpty()) {
-                        return errorJson("REDIRECT_WITHOUT_LOCATION", code, "Apps Script không trả URL chuyển hướng");
+                        return errorJson("REDIRECT_WITHOUT_LOCATION", code, "Google không trả URL chuyển hướng");
                     }
                     return getFollowingRedirects(location, 1);
                 }
@@ -132,13 +175,12 @@ public class MainActivity extends Activity {
             if (redirectCount > MAX_REDIRECTS) {
                 return errorJson("TOO_MANY_REDIRECTS", 0, "Quá nhiều lần chuyển hướng");
             }
-
             HttpURLConnection conn = null;
             try {
                 conn = open(url, "GET");
                 conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+                conn.setRequestProperty("Cache-Control", "no-cache");
                 int code = conn.getResponseCode();
-
                 if (isRedirect(code)) {
                     String location = conn.getHeaderField("Location");
                     if (location == null || location.trim().isEmpty()) {
@@ -159,16 +201,12 @@ public class MainActivity extends Activity {
             conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
             conn.setReadTimeout(READ_TIMEOUT_MS);
             conn.setUseCaches(false);
-            conn.setRequestProperty("User-Agent", "ThiDuaTuan-Android/1.1.1");
+            conn.setRequestProperty("User-Agent", "ThiDuaTuan-Android/" + APP_VERSION);
             return conn;
         }
 
         private boolean isRedirect(int code) {
-            return code == HttpURLConnection.HTTP_MOVED_PERM
-                    || code == HttpURLConnection.HTTP_MOVED_TEMP
-                    || code == HttpURLConnection.HTTP_SEE_OTHER
-                    || code == 307
-                    || code == 308;
+            return code == 301 || code == 302 || code == 303 || code == 307 || code == 308;
         }
 
         private String readResponse(HttpURLConnection conn, int code) throws Exception {
@@ -180,19 +218,30 @@ public class MainActivity extends Activity {
                     while ((line = br.readLine()) != null) sb.append(line);
                 }
             }
+            return validateResponse(sb.toString().trim(), code);
+        }
 
-            String response = sb.toString().trim();
-            if (response.isEmpty()) {
-                return errorJson("EMPTY_RESPONSE", code, "Máy chủ không trả dữ liệu");
+        private String validateResponse(String response, int code) {
+            if (response == null || response.trim().isEmpty()) {
+                return errorJson("EMPTY_RESPONSE", code, "Hệ thống không trả dữ liệu");
             }
-
-            // Apps Script API của ứng dụng phải trả JSON. Nếu nhận HTML thì thường là
-            // trang đăng nhập/quyền truy cập hoặc một trang lỗi của Google.
-            if (response.startsWith("<") || response.toLowerCase().contains("<html")) {
-                return errorJson("HTML_RESPONSE", code, "Web App trả HTML thay vì JSON");
+            String lower = response.toLowerCase();
+            if (response.startsWith("<") || lower.contains("<html") || lower.contains("<!doctype")) {
+                return errorJson("HTML_RESPONSE", code, "Google trả trang HTML thay vì dữ liệu ứng dụng");
             }
+            try {
+                new JSONObject(response);
+                return response;
+            } catch (Exception ex) {
+                return errorJson("BAD_JSON", code, "Phản hồi không phải JSON hợp lệ");
+            }
+        }
 
-            return response;
+        private boolean looksLikeTransportError(String response) {
+            if (response == null) return true;
+            return response.contains("\"error\":\"HTML_RESPONSE\"")
+                    || response.contains("\"error\":\"EMPTY_RESPONSE\"")
+                    || response.contains("\"error\":\"BAD_JSON\"");
         }
 
         private String errorJson(String error, int httpCode, String message) {
@@ -203,6 +252,7 @@ public class MainActivity extends Activity {
 
         private void callback(String requestId, String response) {
             runOnUiThread(() -> {
+                if (webView == null) return;
                 String js = "window.__androidApiResponse(" + JSONObject.quote(requestId) + "," + JSONObject.quote(response) + ");";
                 webView.evaluateJavascript(js, null);
             });
