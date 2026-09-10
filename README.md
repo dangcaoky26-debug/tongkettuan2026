@@ -4,7 +4,7 @@
 
 ## Đầu ra chính
 - `Code.gs`: Google Apps Script backend.
-- APK: được GitHub Actions tự động build trong workflow **Build Android APK**.
+- `apk/ThiDuaTuan.apk`: APK được GitHub Actions tự động build và lưu lại ngay trong repo sau khi build thành công.
 
 ## Cấu trúc
 - `app/`: mã nguồn Android.
