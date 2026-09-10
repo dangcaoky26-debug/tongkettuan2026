@@ -29,7 +29,7 @@ import okhttp3.Response;
 
 public class MainActivity extends Activity {
     private static final String API_URL = "https://script.google.com/macros/s/AKfycbzgyZkUcSWPaO1PYZ_RWUyeS0KXnT9A9FZ_g_wcLQqknf7uYUt1NAXLapHMdIeY_gmq/exec";
-    private static final String APP_VERSION = "1.2.0";
+    private static final String APP_VERSION = "1.3.0";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
     private static final int MAX_REDIRECTS = 8;
@@ -137,10 +137,6 @@ public class MainActivity extends Activity {
             }
         }
 
-        /**
-         * Fallback cho một số máy Android/WebView cũ: tự theo chuỗi POST -> 302/303 -> GET
-         * của Google Apps Script ContentService.
-         */
         private String postWithUrlConnection(String body) throws Exception {
             HttpURLConnection conn = null;
             try {
