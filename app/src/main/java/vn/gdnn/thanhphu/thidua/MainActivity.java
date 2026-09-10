@@ -29,7 +29,7 @@ import okhttp3.Response;
 
 public class MainActivity extends Activity {
     private static final String API_URL = "https://script.google.com/macros/s/AKfycbzgyZkUcSWPaO1PYZ_RWUyeS0KXnT9A9FZ_g_wcLQqknf7uYUt1NAXLapHMdIeY_gmq/exec";
-    private static final String APP_VERSION = "1.3.0";
+    private static final String APP_VERSION = "1.4.0";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
     private static final int MAX_REDIRECTS = 8;
@@ -51,7 +51,6 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         webView = new WebView(this);
         setContentView(webView);
-
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -81,32 +80,23 @@ public class MainActivity extends Activity {
         AppBridge(Context ctx) {}
 
         @JavascriptInterface
-        public String getApiUrl() {
-            return API_URL;
-        }
+        public String getApiUrl() { return API_URL; }
 
         @JavascriptInterface
-        public void setApiUrl(String url) {
-            // API được cố định trong ứng dụng.
-        }
+        public void setApiUrl(String url) { }
 
         @JavascriptInterface
-        public String getAppVersion() {
-            return APP_VERSION;
-        }
+        public String getAppVersion() { return APP_VERSION; }
 
         @JavascriptInterface
         public void apiRequest(String requestId, String jsonBody) {
             final String rid = requestId == null ? "" : requestId;
             final String body = jsonBody == null ? "{}" : jsonBody;
-
             executor.execute(() -> {
                 String response;
                 try {
                     response = postWithOkHttp(body);
-                    if (looksLikeTransportError(response)) {
-                        response = postWithUrlConnection(body);
-                    }
+                    if (looksLikeTransportError(response)) response = postWithUrlConnection(body);
                 } catch (Exception first) {
                     try {
                         response = postWithUrlConnection(body);
@@ -129,7 +119,6 @@ public class MainActivity extends Activity {
                     .header("Cache-Control", "no-cache")
                     .header("User-Agent", "ThiDuaTuan-Android/" + APP_VERSION)
                     .build();
-
             try (Response response = httpClient.newCall(request).execute()) {
                 int code = response.code();
                 String raw = response.body() == null ? "" : response.body().string().trim();
@@ -145,20 +134,16 @@ public class MainActivity extends Activity {
                 conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
                 conn.setRequestProperty("Accept", "application/json, text/plain, */*");
                 conn.setRequestProperty("Cache-Control", "no-cache");
-
                 byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
                 conn.setFixedLengthStreamingMode(bytes.length);
                 try (OutputStream os = conn.getOutputStream()) {
                     os.write(bytes);
                     os.flush();
                 }
-
                 int code = conn.getResponseCode();
                 if (isRedirect(code)) {
                     String location = conn.getHeaderField("Location");
-                    if (location == null || location.trim().isEmpty()) {
-                        return errorJson("REDIRECT_WITHOUT_LOCATION", code, "Google không trả URL chuyển hướng");
-                    }
+                    if (location == null || location.trim().isEmpty()) return errorJson("REDIRECT_WITHOUT_LOCATION", code, "Google không trả URL chuyển hướng");
                     return getFollowingRedirects(location, 1);
                 }
                 return readResponse(conn, code);
@@ -168,9 +153,7 @@ public class MainActivity extends Activity {
         }
 
         private String getFollowingRedirects(String url, int redirectCount) throws Exception {
-            if (redirectCount > MAX_REDIRECTS) {
-                return errorJson("TOO_MANY_REDIRECTS", 0, "Quá nhiều lần chuyển hướng");
-            }
+            if (redirectCount > MAX_REDIRECTS) return errorJson("TOO_MANY_REDIRECTS", 0, "Quá nhiều lần chuyển hướng");
             HttpURLConnection conn = null;
             try {
                 conn = open(url, "GET");
@@ -179,9 +162,7 @@ public class MainActivity extends Activity {
                 int code = conn.getResponseCode();
                 if (isRedirect(code)) {
                     String location = conn.getHeaderField("Location");
-                    if (location == null || location.trim().isEmpty()) {
-                        return errorJson("REDIRECT_WITHOUT_LOCATION", code, "Thiếu URL chuyển hướng");
-                    }
+                    if (location == null || location.trim().isEmpty()) return errorJson("REDIRECT_WITHOUT_LOCATION", code, "Thiếu URL chuyển hướng");
                     return getFollowingRedirects(location, redirectCount + 1);
                 }
                 return readResponse(conn, code);
@@ -218,13 +199,9 @@ public class MainActivity extends Activity {
         }
 
         private String validateResponse(String response, int code) {
-            if (response == null || response.trim().isEmpty()) {
-                return errorJson("EMPTY_RESPONSE", code, "Hệ thống không trả dữ liệu");
-            }
+            if (response == null || response.trim().isEmpty()) return errorJson("EMPTY_RESPONSE", code, "Hệ thống không trả dữ liệu");
             String lower = response.toLowerCase();
-            if (response.startsWith("<") || lower.contains("<html") || lower.contains("<!doctype")) {
-                return errorJson("HTML_RESPONSE", code, "Google trả trang HTML thay vì dữ liệu ứng dụng");
-            }
+            if (response.startsWith("<") || lower.contains("<html") || lower.contains("<!doctype")) return errorJson("HTML_RESPONSE", code, "Google trả trang HTML thay vì dữ liệu ứng dụng");
             try {
                 new JSONObject(response);
                 return response;
@@ -235,15 +212,11 @@ public class MainActivity extends Activity {
 
         private boolean looksLikeTransportError(String response) {
             if (response == null) return true;
-            return response.contains("\"error\":\"HTML_RESPONSE\"")
-                    || response.contains("\"error\":\"EMPTY_RESPONSE\"")
-                    || response.contains("\"error\":\"BAD_JSON\"");
+            return response.contains("\"error\":\"HTML_RESPONSE\"") || response.contains("\"error\":\"EMPTY_RESPONSE\"") || response.contains("\"error\":\"BAD_JSON\"");
         }
 
         private String errorJson(String error, int httpCode, String message) {
-            return "{\"ok\":false,\"error\":" + JSONObject.quote(error)
-                    + ",\"httpCode\":" + httpCode
-                    + ",\"message\":" + JSONObject.quote(message) + "}";
+            return "{\"ok\":false,\"error\":" + JSONObject.quote(error) + ",\"httpCode\":" + httpCode + ",\"message\":" + JSONObject.quote(message) + "}";
         }
 
         private void callback(String requestId, String response) {
