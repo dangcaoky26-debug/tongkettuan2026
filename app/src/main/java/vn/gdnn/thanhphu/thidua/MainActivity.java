@@ -29,7 +29,7 @@ import okhttp3.Response;
 
 public class MainActivity extends Activity {
     private static final String API_URL = "https://script.google.com/macros/s/AKfycbzgyZkUcSWPaO1PYZ_RWUyeS0KXnT9A9FZ_g_wcLQqknf7uYUt1NAXLapHMdIeY_gmq/exec";
-    private static final String APP_VERSION = "1.5.0";
+    private static final String APP_VERSION = "1.6.0";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
     private static final int MAX_REDIRECTS = 8;
@@ -78,18 +78,10 @@ public class MainActivity extends Activity {
 
     private final class AppBridge {
         AppBridge(Context ctx) {}
-
-        @JavascriptInterface
-        public String getApiUrl() { return API_URL; }
-
-        @JavascriptInterface
-        public void setApiUrl(String url) { }
-
-        @JavascriptInterface
-        public String getAppVersion() { return APP_VERSION; }
-
-        @JavascriptInterface
-        public void apiRequest(String requestId, String jsonBody) {
+        @JavascriptInterface public String getApiUrl() { return API_URL; }
+        @JavascriptInterface public void setApiUrl(String url) { }
+        @JavascriptInterface public String getAppVersion() { return APP_VERSION; }
+        @JavascriptInterface public void apiRequest(String requestId, String jsonBody) {
             final String rid = requestId == null ? "" : requestId;
             final String body = jsonBody == null ? "{}" : jsonBody;
             executor.execute(() -> {
@@ -98,9 +90,8 @@ public class MainActivity extends Activity {
                     response = postWithOkHttp(body);
                     if (looksLikeTransportError(response)) response = postWithUrlConnection(body);
                 } catch (Exception first) {
-                    try {
-                        response = postWithUrlConnection(body);
-                    } catch (Exception second) {
+                    try { response = postWithUrlConnection(body); }
+                    catch (Exception second) {
                         String msg = second.getMessage() == null ? second.getClass().getSimpleName() : second.getMessage();
                         response = errorJson("NETWORK_ERROR", 0, msg);
                     }
@@ -108,38 +99,28 @@ public class MainActivity extends Activity {
                 callback(rid, response);
             });
         }
-
         private String postWithOkHttp(String body) throws Exception {
             MediaType type = MediaType.get("text/plain; charset=utf-8");
             RequestBody requestBody = RequestBody.create(body, type);
-            Request request = new Request.Builder()
-                    .url(API_URL)
-                    .post(requestBody)
+            Request request = new Request.Builder().url(API_URL).post(requestBody)
                     .header("Accept", "application/json, text/plain, */*")
                     .header("Cache-Control", "no-cache")
-                    .header("User-Agent", "ThiDuaTuan-Android/" + APP_VERSION)
-                    .build();
+                    .header("User-Agent", "ThiDuaTuan-Android/" + APP_VERSION).build();
             try (Response response = httpClient.newCall(request).execute()) {
                 int code = response.code();
                 String raw = response.body() == null ? "" : response.body().string().trim();
                 return validateResponse(raw, code);
             }
         }
-
         private String postWithUrlConnection(String body) throws Exception {
             HttpURLConnection conn = null;
             try {
-                conn = open(API_URL, "POST");
-                conn.setDoOutput(true);
+                conn = open(API_URL, "POST"); conn.setDoOutput(true);
                 conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
                 conn.setRequestProperty("Accept", "application/json, text/plain, */*");
                 conn.setRequestProperty("Cache-Control", "no-cache");
-                byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-                conn.setFixedLengthStreamingMode(bytes.length);
-                try (OutputStream os = conn.getOutputStream()) {
-                    os.write(bytes);
-                    os.flush();
-                }
+                byte[] bytes = body.getBytes(StandardCharsets.UTF_8); conn.setFixedLengthStreamingMode(bytes.length);
+                try (OutputStream os = conn.getOutputStream()) { os.write(bytes); os.flush(); }
                 int code = conn.getResponseCode();
                 if (isRedirect(code)) {
                     String location = conn.getHeaderField("Location");
@@ -147,18 +128,13 @@ public class MainActivity extends Activity {
                     return getFollowingRedirects(location, 1);
                 }
                 return readResponse(conn, code);
-            } finally {
-                if (conn != null) conn.disconnect();
-            }
+            } finally { if (conn != null) conn.disconnect(); }
         }
-
         private String getFollowingRedirects(String url, int redirectCount) throws Exception {
             if (redirectCount > MAX_REDIRECTS) return errorJson("TOO_MANY_REDIRECTS", 0, "Quá nhiều lần chuyển hướng");
             HttpURLConnection conn = null;
             try {
-                conn = open(url, "GET");
-                conn.setRequestProperty("Accept", "application/json, text/plain, */*");
-                conn.setRequestProperty("Cache-Control", "no-cache");
+                conn = open(url, "GET"); conn.setRequestProperty("Accept", "application/json, text/plain, */*"); conn.setRequestProperty("Cache-Control", "no-cache");
                 int code = conn.getResponseCode();
                 if (isRedirect(code)) {
                     String location = conn.getHeaderField("Location");
@@ -166,65 +142,35 @@ public class MainActivity extends Activity {
                     return getFollowingRedirects(location, redirectCount + 1);
                 }
                 return readResponse(conn, code);
-            } finally {
-                if (conn != null) conn.disconnect();
-            }
+            } finally { if (conn != null) conn.disconnect(); }
         }
-
         private HttpURLConnection open(String url, String method) throws Exception {
-            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-            conn.setInstanceFollowRedirects(false);
-            conn.setRequestMethod(method);
-            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(READ_TIMEOUT_MS);
-            conn.setUseCaches(false);
-            conn.setRequestProperty("User-Agent", "ThiDuaTuan-Android/" + APP_VERSION);
-            return conn;
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection(); conn.setInstanceFollowRedirects(false); conn.setRequestMethod(method);
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS); conn.setReadTimeout(READ_TIMEOUT_MS); conn.setUseCaches(false);
+            conn.setRequestProperty("User-Agent", "ThiDuaTuan-Android/" + APP_VERSION); return conn;
         }
-
-        private boolean isRedirect(int code) {
-            return code == 301 || code == 302 || code == 303 || code == 307 || code == 308;
-        }
-
+        private boolean isRedirect(int code) { return code == 301 || code == 302 || code == 303 || code == 307 || code == 308; }
         private String readResponse(HttpURLConnection conn, int code) throws Exception {
-            InputStream stream = code >= 200 && code < 400 ? conn.getInputStream() : conn.getErrorStream();
-            StringBuilder sb = new StringBuilder();
-            if (stream != null) {
-                try (BufferedReader br = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = br.readLine()) != null) sb.append(line);
-                }
-            }
+            InputStream stream = code >= 200 && code < 400 ? conn.getInputStream() : conn.getErrorStream(); StringBuilder sb = new StringBuilder();
+            if (stream != null) try (BufferedReader br = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) { String line; while ((line = br.readLine()) != null) sb.append(line); }
             return validateResponse(sb.toString().trim(), code);
         }
-
         private String validateResponse(String response, int code) {
             if (response == null || response.trim().isEmpty()) return errorJson("EMPTY_RESPONSE", code, "Hệ thống không trả dữ liệu");
             String lower = response.toLowerCase();
             if (response.startsWith("<") || lower.contains("<html") || lower.contains("<!doctype")) return errorJson("HTML_RESPONSE", code, "Google trả trang HTML thay vì dữ liệu ứng dụng");
-            try {
-                new JSONObject(response);
-                return response;
-            } catch (Exception ex) {
-                return errorJson("BAD_JSON", code, "Phản hồi không phải JSON hợp lệ");
-            }
+            try { new JSONObject(response); return response; }
+            catch (Exception ex) { return errorJson("BAD_JSON", code, "Phản hồi không phải JSON hợp lệ"); }
         }
-
         private boolean looksLikeTransportError(String response) {
             if (response == null) return true;
             return response.contains("\"error\":\"HTML_RESPONSE\"") || response.contains("\"error\":\"EMPTY_RESPONSE\"") || response.contains("\"error\":\"BAD_JSON\"");
         }
-
         private String errorJson(String error, int httpCode, String message) {
             return "{\"ok\":false,\"error\":" + JSONObject.quote(error) + ",\"httpCode\":" + httpCode + ",\"message\":" + JSONObject.quote(message) + "}";
         }
-
         private void callback(String requestId, String response) {
-            runOnUiThread(() -> {
-                if (webView == null) return;
-                String js = "window.__androidApiResponse(" + JSONObject.quote(requestId) + "," + JSONObject.quote(response) + ");";
-                webView.evaluateJavascript(js, null);
-            });
+            runOnUiThread(() -> { if (webView == null) return; String js = "window.__androidApiResponse(" + JSONObject.quote(requestId) + "," + JSONObject.quote(response) + ");"; webView.evaluateJavascript(js, null); });
         }
     }
 }
