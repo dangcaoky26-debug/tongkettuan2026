@@ -2,7 +2,6 @@ package vn.gdnn.thanhphu.thidua;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
@@ -22,6 +21,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
+    private static final String API_URL = "https://script.google.com/macros/s/AKfycbzgyZkUcSWPaO1PYZ_RWUyeS0KXnT9A9FZ_g_wcLQqknf7uYUt1NAXLapHMdIeY_gmq/exec";
+
     private WebView webView;
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
 
@@ -56,43 +57,34 @@ public class MainActivity extends Activity {
     }
 
     private final class AppBridge {
-        private final SharedPreferences prefs;
-
-        AppBridge(Context ctx) {
-            prefs = ctx.getSharedPreferences("thi_dua_prefs", MODE_PRIVATE);
-        }
+        AppBridge(Context ctx) {}
 
         @JavascriptInterface
         public String getApiUrl() {
-            return prefs.getString("api_url", "");
+            return API_URL;
         }
 
         @JavascriptInterface
         public void setApiUrl(String url) {
-            if (url == null) url = "";
-            prefs.edit().putString("api_url", url.trim()).apply();
+            // API được cố định trong ứng dụng để tránh người dùng thay đổi nhầm.
         }
 
         @JavascriptInterface
         public String getAppVersion() {
-            return "1.0.0";
+            return "1.1.0";
         }
 
         @JavascriptInterface
         public void apiRequest(String requestId, String jsonBody) {
             final String rid = requestId == null ? "" : requestId;
             final String body = jsonBody == null ? "{}" : jsonBody;
-            final String apiUrl = getApiUrl();
-            if (apiUrl.isEmpty()) {
-                callback(rid, "{\"ok\":false,\"error\":\"API_NOT_CONFIGURED\"}");
-                return;
-            }
 
             executor.execute(() -> {
                 HttpURLConnection conn = null;
                 try {
-                    URL url = new URL(apiUrl);
+                    URL url = new URL(API_URL);
                     conn = (HttpURLConnection) url.openConnection();
+                    conn.setInstanceFollowRedirects(true);
                     conn.setRequestMethod("POST");
                     conn.setConnectTimeout(12000);
                     conn.setReadTimeout(20000);
