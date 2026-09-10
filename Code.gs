@@ -1,14 +1,14 @@
 /**
- * THI ĐUA TUẦN 2026-2027 - Apps Script API V1.1
+ * THI ĐUA TUẦN 2026-2027 - Apps Script API V1.2
  * Spreadsheet: TỔNG KẾT TUẦN 2026-2027
  */
 const SPREADSHEET_ID = '1iarqsBIYbot9KD0UQAhZcwlQEiJZhSHxQk8NP1496g4';
 const START_SCORE = 200;
 const TOKEN_DAYS = 30;
-const CLASSES = ['10A','10B','10C','10D','11A','11B','11C','11D','11E','11F','11G','12A','12B','12C','12D','12E','12F'];
+const CLASSES = ['10A','10B','10C','10D','10E','11A','11B','11C','11D','11E','12A','12B','12C','12D','12E','12F','12G'];
 
 function doGet() {
-  return json_({ok:true, service:'THI_DUA_TUAN_API', version:'1.1.0'});
+  return json_({ok:true, service:'THI_DUA_TUAN_API', version:'1.2.0'});
 }
 
 function doPost(e) {
@@ -53,7 +53,7 @@ function setupSystem() {
     s.autoResizeColumns(1, Math.min(s.getLastColumn(),10));
   });
   SpreadsheetApp.flush();
-  return 'Hệ thống đã sẵn sàng cho 17 lớp: 10A-10D, 11A-11G, 12A-12F.';
+  return 'Hệ thống đã sẵn sàng cho 17 lớp: 10A-10E, 11A-11E, 12A-12G.';
 }
 
 function login_(b) {
@@ -90,9 +90,10 @@ function login_(b) {
 }
 
 function normalizeUsername_(value) {
-  let s = String(value || '').trim().toUpperCase().replace(/\s+/g,'');
-  if (/^(10[A-D]|11[A-G]|12[A-F])$/.test(s)) s = 'LT' + s;
-  if (/^(10[A-D]|11[A-G]|12[A-F])_LT$/.test(s)) s = 'LT' + s.replace('_LT','');
+  let s = String(value || '').trim().toUpperCase().replace(/\s+/g,'').replace(/-/g,'');
+  if (/^(10[A-E]|11[A-E]|12[A-G])$/.test(s)) s = 'LT' + s;
+  if (/^(10[A-E]|11[A-E]|12[A-G])_LT$/.test(s)) s = 'LT' + s.replace('_LT','');
+  if (/^LT_(10[A-E]|11[A-E]|12[A-G])$/.test(s)) s = 'LT' + s.slice(3);
   return s;
 }
 
